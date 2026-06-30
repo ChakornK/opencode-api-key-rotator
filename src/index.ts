@@ -598,6 +598,25 @@ export const NvidiaNimKeyRotator: Plugin = async (
       modelCooldowns.set(cooldownModelId, Date.now() + MODEL_COOLDOWN_MS);
     }
 
+    // For subagents: don't abort — update model index for next turn
+    if (await isSubagentSessionCached(client, sessionID)) {
+      const chain = store.fallbackChain;
+      if (chain.length >= 2) {
+        const nextIndex = (state.attemptIndex + 1) % chain.length;
+        state.attemptIndex = nextIndex;
+        state.activeChainModelId = chain[nextIndex]?.id;
+      }
+      proxySessions.set(sessionID, {
+        activeChainModelId: state.activeChainModelId,
+        currentModelId: state.currentModelId,
+      });
+      await showToast(
+        "info",
+        `Subagent rate limited — next turn will use ${state.activeChainModelId ?? "fallback model"}`,
+      );
+      return;
+    }
+
     const reason = describeError(error, state, store.maxRateLimitFailures);
     const triggered = await triggerRetry(sessionID, state, reason, error);
     if (!triggered) {
@@ -629,6 +648,25 @@ export const NvidiaNimKeyRotator: Plugin = async (
     const cooldownModelId = state.currentModelId ?? state.activeChainModelId;
     if (cooldownModelId) {
       modelCooldowns.set(cooldownModelId, Date.now() + MODEL_COOLDOWN_MS);
+    }
+
+    // For subagents: don't abort — update model index for next turn
+    if (await isSubagentSessionCached(client, sessionID)) {
+      const chain = store.fallbackChain;
+      if (chain.length >= 2) {
+        const nextIndex = (state.attemptIndex + 1) % chain.length;
+        state.attemptIndex = nextIndex;
+        state.activeChainModelId = chain[nextIndex]?.id;
+      }
+      proxySessions.set(sessionID, {
+        activeChainModelId: state.activeChainModelId,
+        currentModelId: state.currentModelId,
+      });
+      await showToast(
+        "info",
+        `Subagent rate limited — next turn will use ${state.activeChainModelId ?? "fallback model"}`,
+      );
+      return;
     }
 
     const reason = `Rate limited (429) — ${state.rateLimitCount}/${store.maxRateLimitFailures} consecutive`;
@@ -680,6 +718,25 @@ export const NvidiaNimKeyRotator: Plugin = async (
     const cooldownModelId = state.currentModelId ?? state.activeChainModelId;
     if (cooldownModelId) {
       modelCooldowns.set(cooldownModelId, Date.now() + MODEL_COOLDOWN_MS);
+    }
+
+    // For subagents: don't abort — update model index for next turn
+    if (await isSubagentSessionCached(client, sessionID)) {
+      const chain = store.fallbackChain;
+      if (chain.length >= 2) {
+        const nextIndex = (state.attemptIndex + 1) % chain.length;
+        state.attemptIndex = nextIndex;
+        state.activeChainModelId = chain[nextIndex]?.id;
+      }
+      proxySessions.set(sessionID, {
+        activeChainModelId: state.activeChainModelId,
+        currentModelId: state.currentModelId,
+      });
+      await showToast(
+        "info",
+        `Subagent rate limited — next turn will use ${state.activeChainModelId ?? "fallback model"}`,
+      );
+      return;
     }
 
     const reason = `Rate limited (429) — ${state.rateLimitCount}/${store.maxRateLimitFailures} consecutive`;

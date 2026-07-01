@@ -189,21 +189,25 @@ export const NvidiaNimKeyRotator: Plugin = async (
   >();
   const proxyPort =
     typeof options?.proxyPort === "number" ? options.proxyPort : 8765;
+  const disableProxy = options?.disableProxy === true;
 
-  const proxy = startProxy({
-    port: proxyPort,
-    store,
-    config,
-    sessions: proxySessions,
-    onRateLimit: (sessionID: string, modelId: string) => {
-      const state = sessions.get(sessionID);
-      if (state) {
-        state.rateLimitCount++;
-      }
-      safeSaveStore();
-    },
-  });
-  const actualProxyPort = proxy.port;
+  let actualProxyPort = 0;
+  if (!disableProxy) {
+    const proxy = startProxy({
+      port: proxyPort,
+      store,
+      config,
+      sessions: proxySessions,
+      onRateLimit: (sessionID: string, modelId: string) => {
+        const state = sessions.get(sessionID);
+        if (state) {
+          state.rateLimitCount++;
+        }
+        safeSaveStore();
+      },
+    });
+    actualProxyPort = proxy.port;
+  }
 
   const reloadFromDisk = () => {
     let fresh: KeyStore | null = null;
@@ -772,10 +776,12 @@ export const NvidiaNimKeyRotator: Plugin = async (
 
   const hooks: Hooks = {
     config: async (cfg: any) => {
-      if (!cfg.provider) cfg.provider = {};
-      if (!cfg.provider.nvidia) cfg.provider.nvidia = {};
-      if (!cfg.provider.nvidia.options) cfg.provider.nvidia.options = {};
-      cfg.provider.nvidia.options.baseURL = `http://localhost:${actualProxyPort}`;
+      if (!disableProxy) {
+        if (!cfg.provider) cfg.provider = {};
+        if (!cfg.provider.nvidia) cfg.provider.nvidia = {};
+        if (!cfg.provider.nvidia.options) cfg.provider.nvidia.options = {};
+        cfg.provider.nvidia.options.baseURL = `http://localhost:${actualProxyPort}`;
+      }
     },
     auth: {
       provider: PROVIDER_ID,

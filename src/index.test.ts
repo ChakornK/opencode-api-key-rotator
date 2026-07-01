@@ -1,7 +1,18 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterEach } from "bun:test";
 import { NvidiaNimKeyRotator } from "./index.js";
 import type { PluginInput } from "@opencode-ai/plugin";
 import { writeFileSync, unlinkSync, existsSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+let testStoreCounter = 0;
+
+function createTestStorePath(): string {
+  return join(
+    tmpdir(),
+    `test-nim-rotator-${Date.now()}-${++testStoreCounter}.json`,
+  );
+}
 
 function createMockClient(
   overrides: {
@@ -33,12 +44,22 @@ function createPluginInput(client: PluginInput["client"]): PluginInput {
   return { client } as PluginInput;
 }
 
+function createTestPlugin(client: PluginInput["client"], storePath?: string) {
+  return NvidiaNimKeyRotator(createPluginInput(client), {
+    storePath: storePath ?? createTestStorePath(),
+    proxyPort: 0,
+    disableProxy: true,
+  });
+}
+
 describe("NvidiaNimKeyRotator", () => {
+  afterEach(() => {
+    testStoreCounter = 0;
+  });
+
   it("should export the plugin", async () => {
     const client = createMockClient();
-    const plugin = await NvidiaNimKeyRotator(createPluginInput(client), {
-      proxyPort: 0,
-    });
+    const plugin = await createTestPlugin(client);
     expect(plugin).toBeDefined();
     expect(plugin.auth).toBeDefined();
     expect(plugin["chat.headers"]).toBeDefined();
@@ -57,9 +78,7 @@ describe("NvidiaNimKeyRotator", () => {
       },
     });
 
-    const plugin = await NvidiaNimKeyRotator(createPluginInput(client), {
-      proxyPort: 0,
-    });
+    const plugin = await createTestPlugin(client);
     const event = {
       type: "session.error" as const,
       properties: {
@@ -69,7 +88,6 @@ describe("NvidiaNimKeyRotator", () => {
     };
 
     await plugin.event!({ event } as any);
-    // Subagent should not be aborted
     expect(abortCalled).toBe(false);
   });
 
@@ -78,9 +96,7 @@ describe("NvidiaNimKeyRotator", () => {
       sessionGet: () => Promise.resolve({ data: { parentID: undefined } }),
     });
 
-    const plugin = await NvidiaNimKeyRotator(createPluginInput(client), {
-      proxyPort: 0,
-    });
+    const plugin = await createTestPlugin(client);
     const event = {
       type: "session.error" as const,
       properties: {
@@ -89,7 +105,6 @@ describe("NvidiaNimKeyRotator", () => {
       },
     };
 
-    // Seed the session state by running chat.message first
     await plugin["chat.message"]!(
       {
         sessionID: "primary-123",
@@ -103,37 +118,47 @@ describe("NvidiaNimKeyRotator", () => {
       } as any,
     );
 
-    // Should not throw when handling rate limit for primary session
     await plugin.event!({ event } as any);
     expect(true).toBe(true);
   });
 
   it("should proactively skip blacklisted models in chat.message", async () => {
     const client = createMockClient();
-    const plugin = await NvidiaNimKeyRotator(createPluginInput(client), {
-      storePath: "/tmp/test-nim-rotator-keys.json",
-      proxyPort: 0,
-    });
-
-    // The fallback chain is empty by default, so chat.message should be a no-op
-    const output = {
-      message: {
-        id: "msg-1",
-        model: { providerID: "nvidia", modelID: "llama-3.1-70b" },
-      },
-    };
-    await plugin["chat.message"]!(
-      {
-        sessionID: "test-123",
-        model: { providerID: "nvidia", modelID: "llama-3.1-70b" },
-      } as any,
-      output as any,
+    const storePath = createTestStorePath();
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        keys: [],
+        currentIndex: 0,
+        rotationStrategy: "round-robin",
+        updatedAt: Date.now(),
+        fallbackChain: [],
+        maxRateLimitFailures: 3,
+      }),
     );
-    // Model should remain unchanged when fallback chain is empty
-    expect(output.message.model).toEqual({
-      providerID: "nvidia",
-      modelID: "llama-3.1-70b",
-    });
+    try {
+      const plugin = await createTestPlugin(client, storePath);
+
+      const output = {
+        message: {
+          id: "msg-1",
+          model: { providerID: "nvidia", modelID: "llama-3.1-70b" },
+        },
+      };
+      await plugin["chat.message"]!(
+        {
+          sessionID: "test-123",
+          model: { providerID: "nvidia", modelID: "llama-3.1-70b" },
+        } as any,
+        output as any,
+      );
+      expect(output.message.model).toEqual({
+        providerID: "nvidia",
+        modelID: "llama-3.1-70b",
+      });
+    } finally {
+      if (existsSync(storePath)) unlinkSync(storePath);
+    }
   });
 
   it("should update model index for subagent on rate limit", async () => {
@@ -141,9 +166,7 @@ describe("NvidiaNimKeyRotator", () => {
       sessionGet: () => Promise.resolve({ data: { parentID: "parent-123" } }),
     });
 
-    const plugin = await NvidiaNimKeyRotator(createPluginInput(client), {
-      proxyPort: 0,
-    });
+    const plugin = await createTestPlugin(client);
     const event = {
       type: "session.error" as const,
       properties: {
@@ -152,7 +175,6 @@ describe("NvidiaNimKeyRotator", () => {
       },
     };
 
-    // First, seed the session state
     await plugin["chat.message"]!(
       {
         sessionID: "subagent-123",
@@ -166,24 +188,17 @@ describe("NvidiaNimKeyRotator", () => {
       } as any,
     );
 
-    // Trigger rate limit enough times to exceed maxRateLimitFailures (default 3)
     for (let i = 0; i < 3; i++) {
       await plugin.event!({ event } as any);
     }
 
-    // Subagent should not abort, but model index should be updated
-    // Since the fallback chain is empty, nothing much changes,
-    // but the important thing is no exception was thrown
     expect(true).toBe(true);
   });
 
   it("should handle session.status idle event and cleanup state", async () => {
     const client = createMockClient();
-    const plugin = await NvidiaNimKeyRotator(createPluginInput(client), {
-      proxyPort: 0,
-    });
+    const plugin = await createTestPlugin(client);
 
-    // Seed the session state
     await plugin["chat.message"]!(
       {
         sessionID: "test-123",
@@ -206,12 +221,11 @@ describe("NvidiaNimKeyRotator", () => {
     };
 
     await plugin.event!({ event } as any);
-    // Session state should be cleaned up
     expect(true).toBe(true);
   });
 
   it("should reset to first model after cooldown expires", async () => {
-    const storePath = "/tmp/test-nim-rotator-cooldown-expire.json";
+    const storePath = createTestStorePath();
     let originalDateNow: typeof Date.now = Date.now;
     try {
       writeFileSync(
@@ -233,9 +247,9 @@ describe("NvidiaNimKeyRotator", () => {
       const plugin = await NvidiaNimKeyRotator(createPluginInput(client), {
         storePath,
         proxyPort: 0,
+        disableProxy: true,
       });
 
-      // First message with model-a
       const output1 = {
         message: {
           id: "msg-1",
@@ -254,7 +268,6 @@ describe("NvidiaNimKeyRotator", () => {
         modelID: "model-a",
       });
 
-      // Simulate rate limit errors to trigger fallback from model-a to model-b
       const event = {
         type: "session.error" as const,
         properties: {
@@ -275,7 +288,6 @@ describe("NvidiaNimKeyRotator", () => {
         }
       }
 
-      // Simulate session idle to clean up state
       await plugin.event!({
         event: {
           type: "session.status",
@@ -286,8 +298,6 @@ describe("NvidiaNimKeyRotator", () => {
         },
       } as any);
 
-      // After fallback, model-a has a 1-hour cooldown
-      // Next message with model-b should use model-b (fallback)
       const output2 = {
         message: {
           id: "msg-2",
@@ -306,15 +316,12 @@ describe("NvidiaNimKeyRotator", () => {
         modelID: "model-b",
       });
 
-      // Mock Date.now to expire the cooldown
       originalDateNow = Date.now;
       let mockTime = Date.now();
       Date.now = () => mockTime;
 
-      // Advance time by 1 hour + 1 ms
       mockTime += 60 * 60 * 1000 + 1;
 
-      // After cooldown expires, next message with model-b should use model-a (first model)
       const output3 = {
         message: {
           id: "msg-3",
@@ -334,9 +341,7 @@ describe("NvidiaNimKeyRotator", () => {
       });
     } finally {
       Date.now = originalDateNow;
-      try {
-        unlinkSync(storePath);
-      } catch {}
+      if (existsSync(storePath)) unlinkSync(storePath);
     }
   }, 10000);
 });

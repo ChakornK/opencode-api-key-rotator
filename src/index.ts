@@ -386,12 +386,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
       // Calculate delay with exponential backoff
       const delay = calculateRetryDelay(attempt, error);
 
-      // Show notification before delay so user doesn't think it's frozen
       if (delay > 0) {
-        await showToast(
-          "info",
-          `Retrying with fallback model in ${Math.ceil(delay / 1000)}s...`,
-        );
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
@@ -415,11 +410,6 @@ export const NvidiaNimKeyRotator: Plugin = async (
           );
           return false;
         }
-
-        await showToast(
-          "warning",
-          `${source.name} → ${target.name}${reason ? `: ${reason}` : ""}`,
-        );
 
         const messagesResult = await client.session.messages({
           path: { id: sessionID },
@@ -515,6 +505,8 @@ export const NvidiaNimKeyRotator: Plugin = async (
           },
         });
 
+        await showToast("info", `Switched to ${target.name}`);
+
         logDebug(
           `[nim-rotator] triggerRetry: successfully triggered fallback for session ${sessionID}`,
         );
@@ -599,12 +591,22 @@ export const NvidiaNimKeyRotator: Plugin = async (
     }
 
     // For subagents: don't abort — update model index for next turn
-    if (await isSubagentSessionCached(client, sessionID)) {
+    const isSubagent = await isSubagentSessionCached(client, sessionID);
+    logDebug(
+      `[nim-rotator] handleSessionError: isSubagent=${isSubagent} for ${sessionID}`,
+    );
+    if (isSubagent) {
       const chain = store.fallbackChain;
+      logDebug(
+        `[nim-rotator] handleSessionError: subagent fallback, chain.length=${chain.length}, attemptIndex=${state.attemptIndex}`,
+      );
       if (chain.length >= 2) {
         const nextIndex = (state.attemptIndex + 1) % chain.length;
         state.attemptIndex = nextIndex;
         state.activeChainModelId = chain[nextIndex]?.id;
+        logDebug(
+          `[nim-rotator] handleSessionError: subagent fallback to model ${state.activeChainModelId}`,
+        );
       }
       proxySessions.set(sessionID, {
         activeChainModelId: state.activeChainModelId,
@@ -651,12 +653,22 @@ export const NvidiaNimKeyRotator: Plugin = async (
     }
 
     // For subagents: don't abort — update model index for next turn
-    if (await isSubagentSessionCached(client, sessionID)) {
+    const isSubagent2 = await isSubagentSessionCached(client, sessionID);
+    logDebug(
+      `[nim-rotator] handleSessionStatusRetry: isSubagent=${isSubagent2} for ${sessionID}`,
+    );
+    if (isSubagent2) {
       const chain = store.fallbackChain;
+      logDebug(
+        `[nim-rotator] handleSessionStatusRetry: subagent fallback, chain.length=${chain.length}, attemptIndex=${state.attemptIndex}`,
+      );
       if (chain.length >= 2) {
         const nextIndex = (state.attemptIndex + 1) % chain.length;
         state.attemptIndex = nextIndex;
         state.activeChainModelId = chain[nextIndex]?.id;
+        logDebug(
+          `[nim-rotator] handleSessionStatusRetry: subagent fallback to model ${state.activeChainModelId}`,
+        );
       }
       proxySessions.set(sessionID, {
         activeChainModelId: state.activeChainModelId,
@@ -721,12 +733,22 @@ export const NvidiaNimKeyRotator: Plugin = async (
     }
 
     // For subagents: don't abort — update model index for next turn
-    if (await isSubagentSessionCached(client, sessionID)) {
+    const isSubagent3 = await isSubagentSessionCached(client, sessionID);
+    logDebug(
+      `[nim-rotator] handleSessionStepFailed: isSubagent=${isSubagent3} for ${sessionID}`,
+    );
+    if (isSubagent3) {
       const chain = store.fallbackChain;
+      logDebug(
+        `[nim-rotator] handleSessionStepFailed: subagent fallback, chain.length=${chain.length}, attemptIndex=${state.attemptIndex}`,
+      );
       if (chain.length >= 2) {
         const nextIndex = (state.attemptIndex + 1) % chain.length;
         state.attemptIndex = nextIndex;
         state.activeChainModelId = chain[nextIndex]?.id;
+        logDebug(
+          `[nim-rotator] handleSessionStepFailed: subagent fallback to model ${state.activeChainModelId}`,
+        );
       }
       proxySessions.set(sessionID, {
         activeChainModelId: state.activeChainModelId,

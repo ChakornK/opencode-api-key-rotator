@@ -1,3 +1,6 @@
+// Compatibility shim: re-exports store functions under old names for TUI code.
+// The TUI screens/UI code imports from this file. Will be removed once TUI is fully migrated.
+
 import {
   existsSync,
   mkdirSync,
@@ -14,9 +17,9 @@ import type {
   ExportPayload,
   KeyStore,
   KeyStoreConfig,
-  ModelBlacklistEntry,
+  ImportResult,
 } from "./types.js";
-import { logDebug } from "./logger.js";
+import { DEFAULT_MAX_RATE_LIMIT_FAILURES } from "./constants.js";
 
 const DEFAULT_STORE_PATH = join(
   homedir(),
@@ -24,25 +27,15 @@ const DEFAULT_STORE_PATH = join(
   "opencode",
   "nim-rotator-keys.json",
 );
-export const MODEL_BLACKLIST_BASE_DURATION_MS = 30_000;
-export const MODEL_BLACKLIST_MAX_DURATION_MS = 60 * 60 * 1000;
-const MODEL_BLACKLIST_ESCALATION = 1.5;
-
-const MAX_IMPORT_SIZE = 1024 * 1024;
-const MAX_IMPORT_KEYS = 100;
-const MAX_KEY_LENGTH = 256;
-const MAX_NAME_LENGTH = 128;
-const SYSTEM_PATH_PREFIXES = ["/etc/", "/proc/", "/sys/", "/dev/"];
 
 export function getDefaultStore(): KeyStore {
   return {
     keys: [],
-    currentIndex: 0,
     rotationStrategy: "round-robin",
     updatedAt: Date.now(),
     lastUsedKeyId: undefined,
     fallbackChain: [],
-    maxRateLimitFailures: 3,
+    maxRateLimitFailures: DEFAULT_MAX_RATE_LIMIT_FAILURES,
   };
 }
 
@@ -54,137 +47,94 @@ export function resolveStorePath(config?: KeyStoreConfig): string {
   );
 }
 
-export function validateExportPath(filePath: string): string | null {
-  const resolved = resolve(filePath);
-  for (const prefix of SYSTEM_PATH_PREFIXES) {
-    if (resolved.startsWith(prefix)) {
-      return "Cannot write to system directories";
-    }
-  }
-  return null;
-}
-
 export function loadStore(config?: KeyStoreConfig): KeyStore | null {
   const storePath = resolveStorePath(config);
   try {
     if (existsSync(storePath)) {
       const raw = readFileSync(storePath, "utf-8");
       const data = JSON.parse(raw);
-      if (typeof data !== "object" || data === null) {
-        console.warn(
-          `[nim-rotator] Store at "${storePath}" is not a valid object`,
-        );
-        return null;
-      }
+      if (typeof data !== "object" || data === null) return null;
       const store = data as KeyStore;
-      if (!store.keys || !Array.isArray(store.keys)) {
-        console.warn(
-          `[nim-rotator] Store at "${storePath}" has invalid keys format`,
-        );
-        return null;
+      if (!store.keys || !Array.isArray(store.keys)) return null;
+
+      // v1 migration: derive lastUsedKeyId from currentIndex
+      if ("currentIndex" in data && typeof data.currentIndex === "number") {
+        store.lastUsedKeyId = store.keys[data.currentIndex]?.id;
+        delete (data as Record<string, unknown>).currentIndex;
       }
-      if (
-        typeof store.currentIndex !== "number" ||
-        !Number.isFinite(store.currentIndex) ||
-        store.currentIndex < 0 ||
-        !Number.isInteger(store.currentIndex)
-      ) {
-        store.currentIndex = 0;
-      }
-      const built: KeyStore = {
+
+      return {
         ...getDefaultStore(),
         ...store,
         keys: Array.isArray(store.keys)
-          ? store.keys
-              .filter((k) => k !== null && typeof k === "object")
-              .map((k) => {
-                const kr = k as unknown as Record<string, unknown>;
-                return {
-                  ...k,
-                  rateLimitCount:
-                    typeof k.rateLimitCount === "number" ? k.rateLimitCount : 0,
-                  modelBlacklist:
-                    kr.modelBlacklist && typeof kr.modelBlacklist === "object"
-                      ? (kr.modelBlacklist as {
-                          [modelId: string]: ModelBlacklistEntry;
-                        })
-                      : undefined,
-                } as ApiKeyEntry;
-              })
+          ? (store.keys.filter(
+              (k) => k !== null && typeof k === "object",
+            ) as ApiKeyEntry[])
           : [],
         fallbackChain: Array.isArray(store.fallbackChain)
-          ? store.fallbackChain
+          ? store.fallbackChain.filter(
+              (m) => m && typeof m === "object" && m.id,
+            )
           : [],
         maxRateLimitFailures:
           typeof store.maxRateLimitFailures === "number" &&
-          Number.isFinite(store.maxRateLimitFailures) &&
           store.maxRateLimitFailures >= 1
             ? store.maxRateLimitFailures
-            : getDefaultStore().maxRateLimitFailures,
+            : DEFAULT_MAX_RATE_LIMIT_FAILURES,
       };
-      pruneAllExpiredBlacklists(built);
-      logDebug(
-        `[nim-rotator] loadStore: loaded from ${storePath}, fallbackChain.length=${built.fallbackChain.length}, keys.length=${built.keys.length}`,
-      );
-      return built;
     }
-  } catch (err) {
-    console.error(`[nim-rotator] Failed to load store at "${storePath}":`, err);
+  } catch {
+    // Returns null on any parse/read failure.
   }
   return null;
 }
 
 export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
   const storePath = resolveStorePath(config);
-  pruneAllExpiredBlacklists(store);
   const dir = dirname(storePath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   store.updatedAt = Date.now();
 
+  // Sanitize transient benchmark state before writing
+  for (const model of store.fallbackChain) {
+    if (model.benchmarkStatus === "running") {
+      model.benchmarkStatus = "idle";
+    }
+  }
+
   const tmpPath = storePath + ".tmp." + crypto.randomUUID();
   try {
-    logDebug(
-      `[nim-rotator] saveStore: saving to ${storePath}, fallbackChain.length=${store.fallbackChain.length}, keys.length=${store.keys.length}`,
-    );
     writeFileSync(tmpPath, JSON.stringify(store, null, 2) + "\n", {
       mode: 0o600,
     });
     renameSync(tmpPath, storePath);
-    logDebug(`[nim-rotator] saveStore: saved successfully`);
   } catch (err) {
     try {
       unlinkSync(tmpPath);
-    } catch (cleanupErr) {
-      console.debug(
-        `[nim-rotator] Failed to clean up tmp file ${tmpPath}:`,
-        cleanupErr,
-      );
+    } catch {
+      // Best-effort cleanup of temp file.
     }
     throw err;
   }
 }
 
 export function addKey(store: KeyStore, name: string, key: string): void {
-  const entry: ApiKeyEntry = {
+  store.keys.push({
     id: crypto.randomUUID(),
     name,
     key,
     createdAt: Date.now(),
     rateLimitCount: 0,
     enabled: true,
-  };
-  store.keys.push(entry);
+  });
 }
 
 export function removeKey(store: KeyStore, id: string): void {
   const index = store.keys.findIndex((k) => k.id === id);
   if (index === -1) return;
   store.keys.splice(index, 1);
-  if (store.currentIndex >= store.keys.length) {
-    store.currentIndex = 0;
-  }
   if (store.lastUsedKeyId === id) {
     store.lastUsedKeyId = undefined;
   }
@@ -204,21 +154,19 @@ export function toggleKey(
   if (entry) entry.enabled = enabled ?? !entry.enabled;
 }
 
-export function isKeyBlacklisted(
-  entry: ApiKeyEntry,
-  modelId: string | undefined,
-  now: number = Date.now(),
-): boolean {
-  if (!modelId || !entry.modelBlacklist) return false;
-  const slot = entry.modelBlacklist[modelId];
-  return !!slot && slot.blacklistedUntil > now;
-}
-
 export function getActiveKeys(
   store: KeyStore,
   modelId?: string,
 ): ApiKeyEntry[] {
-  return store.keys.filter((k) => k.enabled && !isKeyBlacklisted(k, modelId));
+  const now = Date.now();
+  return store.keys.filter((k) => {
+    if (!k.enabled) return false;
+    if (modelId && k.modelBlacklist) {
+      const slot = k.modelBlacklist[modelId];
+      if (slot && slot.blacklistedUntil > now) return false;
+    }
+    return true;
+  });
 }
 
 export function getNextKey(
@@ -234,51 +182,45 @@ export function getNextKey(
 
   if (strategy === "least-failures") {
     const sorted = [...active].sort((a, b) => {
-      if (a.rateLimitCount !== b.rateLimitCount) {
+      if (a.rateLimitCount !== b.rateLimitCount)
         return a.rateLimitCount - b.rateLimitCount;
-      }
       return (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0);
     });
     const best = sorted[0];
     const realIdx = store.keys.indexOf(best);
-    store.currentIndex = active.indexOf(best);
     store.lastUsedKeyId = best.id;
     best.lastUsedAt = Date.now();
     return { key: best, index: realIdx };
   }
 
-  // round-robin
-  const idx = store.currentIndex % active.length;
-  const selected = active[idx];
+  // Round-robin via lastUsedKeyId cursor
+  const lastIdx = active.findIndex((k) => k.id === store.lastUsedKeyId);
+  const nextIdx = (lastIdx + 1) % active.length;
+  const selected = active[nextIdx];
   const realIdx = store.keys.indexOf(selected);
-  store.currentIndex = (idx + 1) % active.length;
   store.lastUsedKeyId = selected.id;
   selected.lastUsedAt = Date.now();
   return { key: selected, index: realIdx };
 }
 
 export function resetFailures(store: KeyStore, keyId?: string): void {
-  const reset = (entry: ApiKeyEntry) => {
-    entry.rateLimitCount = 0;
-    delete entry.modelBlacklist;
-  };
   if (keyId) {
     const entry = store.keys.find((k) => k.id === keyId);
-    if (entry) reset(entry);
+    if (entry) {
+      entry.rateLimitCount = 0;
+      delete entry.modelBlacklist;
+    }
   } else {
-    for (const k of store.keys) reset(k);
+    for (const k of store.keys) {
+      k.rateLimitCount = 0;
+      delete k.modelBlacklist;
+    }
   }
 }
 
 export function recordRateLimit(store: KeyStore, keyId: string): void {
   const entry = store.keys.find((k) => k.id === keyId);
-  if (!entry) return;
-  entry.rateLimitCount++;
-}
-
-export function resetRateLimit(store: KeyStore, keyId: string): void {
-  const entry = store.keys.find((k) => k.id === keyId);
-  if (entry) entry.rateLimitCount = 0;
+  if (entry) entry.rateLimitCount++;
 }
 
 export function recordModelRateLimit(
@@ -291,59 +233,15 @@ export function recordModelRateLimit(
   if (!entry) return;
   if (!entry.modelBlacklist) entry.modelBlacklist = {};
   const slot = entry.modelBlacklist[modelId];
-  if (slot && slot.blacklistedUntil > now) {
-    const remaining = slot.blacklistedUntil - now;
-    const extendedUntil =
-      now + Math.max(remaining, MODEL_BLACKLIST_BASE_DURATION_MS);
-    const escalatedNext = Math.min(
-      slot.nextDurationMs * MODEL_BLACKLIST_ESCALATION,
-      MODEL_BLACKLIST_MAX_DURATION_MS,
-    );
-    entry.modelBlacklist[modelId] = {
-      blacklistedUntil: extendedUntil,
-      nextDurationMs: escalatedNext,
-    };
-    return;
-  }
-  const previousNext = slot?.nextDurationMs ?? MODEL_BLACKLIST_BASE_DURATION_MS;
-  const duration = Math.min(previousNext, MODEL_BLACKLIST_MAX_DURATION_MS);
+  const base = 30_000;
+  const max = 3_600_000;
+  const factor = 1.5;
+  const previousNext = slot?.nextDurationMs ?? base;
+  const duration = Math.min(previousNext, max);
   entry.modelBlacklist[modelId] = {
     blacklistedUntil: now + duration,
-    nextDurationMs: Math.min(
-      duration * MODEL_BLACKLIST_ESCALATION,
-      MODEL_BLACKLIST_MAX_DURATION_MS,
-    ),
+    nextDurationMs: Math.min(duration * factor, max),
   };
-}
-
-export function clearModelBlacklist(
-  store: KeyStore,
-  keyId: string,
-  modelId: string,
-): void {
-  const entry = store.keys.find((k) => k.id === keyId);
-  if (!entry || !entry.modelBlacklist) return;
-  delete entry.modelBlacklist[modelId];
-  if (Object.keys(entry.modelBlacklist).length === 0) {
-    delete entry.modelBlacklist;
-  }
-}
-
-export function pruneAllExpiredBlacklists(
-  store: KeyStore,
-  now: number = Date.now(),
-): void {
-  for (const entry of store.keys) {
-    if (!entry.modelBlacklist) continue;
-    for (const [modelId, slot] of Object.entries(entry.modelBlacklist)) {
-      if (slot.blacklistedUntil <= now) {
-        delete entry.modelBlacklist[modelId];
-      }
-    }
-    if (Object.keys(entry.modelBlacklist).length === 0) {
-      delete entry.modelBlacklist;
-    }
-  }
 }
 
 export function exportKeys(store: KeyStore): ExportPayload {
@@ -354,6 +252,16 @@ export function exportKeys(store: KeyStore): ExportPayload {
   };
 }
 
+export function validateExportPath(filePath: string): string | null {
+  const resolved = resolve(filePath);
+  const blocked = ["/etc/", "/proc/", "/sys/", "/dev/"];
+  for (const prefix of blocked) {
+    if (resolved.startsWith(prefix))
+      return "Cannot write to system directories";
+  }
+  return null;
+}
+
 export function writeExportFile(
   payload: ExportPayload,
   filePath: string,
@@ -361,10 +269,8 @@ export function writeExportFile(
   const pathError = validateExportPath(filePath);
   if (pathError) throw new Error(pathError);
   const dir = dirname(filePath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  const tmpPath = filePath + ".tmp." + process.pid;
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmpPath = filePath + ".tmp." + crypto.randomUUID();
   try {
     writeFileSync(tmpPath, JSON.stringify(payload, null, 2) + "\n", {
       mode: 0o600,
@@ -373,11 +279,8 @@ export function writeExportFile(
   } catch (err) {
     try {
       unlinkSync(tmpPath);
-    } catch (cleanupErr) {
-      console.debug(
-        `[nim-rotator] Failed to clean up tmp file ${tmpPath}:`,
-        cleanupErr,
-      );
+    } catch {
+      // Best-effort cleanup.
     }
     throw err;
   }
@@ -387,27 +290,16 @@ export function readAndValidateImportFile(
   filePath: string,
 ): { raw: string } | { error: string } {
   const resolved = resolve(filePath);
-  for (const prefix of SYSTEM_PATH_PREFIXES) {
-    if (resolved.startsWith(prefix)) {
+  const blocked = ["/etc/", "/proc/", "/sys/", "/dev/"];
+  for (const prefix of blocked) {
+    if (resolved.startsWith(prefix))
       return { error: "Cannot read from system directories" };
-    }
   }
-
-  let raw: string;
   try {
-    raw = readFileSync(resolved, "utf-8");
-  } catch (err) {
-    console.debug(`[nim-rotator] Cannot read import file ${resolved}:`, err);
+    return { raw: readFileSync(resolved, "utf-8") };
+  } catch {
     return { error: "Cannot read file" };
   }
-  return { raw };
-}
-
-export interface ImportResult {
-  added: number;
-  skipped: number;
-  errors: string[];
-  pendingKeys: ExportedKey[];
 }
 
 export function validateImportPayload(raw: string): ImportResult {
@@ -417,86 +309,56 @@ export function validateImportPayload(raw: string): ImportResult {
     errors: [],
     pendingKeys: [],
   };
-
-  if (raw.length > MAX_IMPORT_SIZE) {
-    result.errors.push(
-      `Import file too large (max ${MAX_IMPORT_SIZE / 1024}KB)`,
-    );
+  if (raw.length > 1024 * 1024) {
+    result.errors.push("Import file too large (max 1MB)");
     return result;
   }
-
   let data: unknown;
   try {
     data = JSON.parse(raw);
-  } catch (err) {
-    console.debug("[nim-rotator] Import file invalid JSON:", err);
+  } catch {
     result.errors.push("Invalid JSON format");
     return result;
   }
-
   if (typeof data !== "object" || data === null) {
     result.errors.push("Expected a JSON object");
     return result;
   }
-
   const rec = data as Record<string, unknown>;
   if (rec.version !== 1) {
     result.errors.push("Unsupported export version");
     return result;
   }
-
   if (!Array.isArray(rec.keys)) {
     result.errors.push("Missing or invalid 'keys' array");
     return result;
   }
-
   for (const entry of rec.keys) {
-    if (result.pendingKeys.length >= MAX_IMPORT_KEYS) {
-      result.errors.push(
-        `Too many keys in import file (max ${MAX_IMPORT_KEYS})`,
-      );
+    if (result.pendingKeys.length >= 100) {
+      result.errors.push("Too many keys in import file (max 100)");
       break;
     }
-
     if (
       typeof entry !== "object" ||
       entry === null ||
       typeof (entry as Record<string, unknown>).name !== "string" ||
       typeof (entry as Record<string, unknown>).key !== "string"
     ) {
-      result.errors.push(
-        "Invalid key entry: must have 'name' and 'key' strings",
-      );
+      result.errors.push("Invalid key entry");
       continue;
     }
-
     const name = ((entry as Record<string, unknown>).name as string).trim();
     const key = ((entry as Record<string, unknown>).key as string).trim();
-
-    if (!name) {
-      result.errors.push("Key entry has empty name");
-      continue;
-    }
-    if (name.length > MAX_NAME_LENGTH) {
-      result.errors.push("Key name exceeds maximum length");
-      continue;
-    }
-    if (!key) {
-      result.errors.push(`Key "${name}" has empty key value`);
-      continue;
-    }
-    if (key.length > MAX_KEY_LENGTH) {
-      result.errors.push(`Key "${name}" exceeds maximum length`);
+    if (!name || !key) {
+      result.errors.push("Key entry has empty name or key");
       continue;
     }
     if (!key.startsWith("nvapi-")) {
       result.errors.push(`Key "${name}" does not start with 'nvapi-'`);
       continue;
     }
-
     result.pendingKeys.push({ name, key });
   }
-
   return result;
 }
 
@@ -506,23 +368,15 @@ export function applyImport(
 ): { added: number; skipped: number } {
   let added = 0;
   let skipped = 0;
-
   for (const { name, key } of pendingKeys) {
-    const existingByName = store.keys.find((k) => k.name === name);
-    if (existingByName) {
+    if (store.keys.find((k) => k.name === name || k.key === key)) {
       skipped++;
       continue;
     }
-
-    const existingByKey = store.keys.find((k) => k.key === key);
-    if (existingByKey) {
-      skipped++;
-      continue;
-    }
-
     addKey(store, name, key);
     added++;
   }
-
   return { added, skipped };
 }
+
+export type { ImportResult };

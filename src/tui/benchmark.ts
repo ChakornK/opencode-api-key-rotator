@@ -3,8 +3,6 @@ import type { FallbackModel } from "../types.js";
 import { callRenderApp, state } from "./state.js";
 
 const NIM_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const FETCH_TIMEOUT_MS = 30_000;
-const STREAM_CHUNK_TIMEOUT_MS = 30_000;
 const TPS_UPDATE_INTERVAL_MS = 2_000;
 const CHARS_PER_TOKEN = 4;
 
@@ -169,8 +167,6 @@ export class BenchmarkRunner {
   ): Promise<void> {
     const signal = this.controller!.signal;
     const startTime = Date.now();
-    const fetchTimeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-    const combinedSignal = AbortSignal.any([signal, fetchTimeout]);
 
     const res = await fetch(NIM_CHAT_URL, {
       method: "POST",
@@ -187,10 +183,10 @@ export class BenchmarkRunner {
               "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
           },
         ],
-        max_tokens: 1024,
+        max_tokens: 512,
         stream: true,
       }),
-      signal: combinedSignal,
+      signal,
     });
 
     if (this.generation !== gen) return;
@@ -224,38 +220,14 @@ export class BenchmarkRunner {
     let contentChunks = 0;
     let buffer = "";
     const decoder = new TextDecoder();
-    let chunkTimeoutId: ReturnType<typeof setTimeout> | null = null;
-
-    const resetChunkTimeout = () => {
-      if (chunkTimeoutId) clearTimeout(chunkTimeoutId);
-      chunkTimeoutId = setTimeout(() => {
-        try {
-          reader.cancel();
-        } catch {}
-      }, STREAM_CHUNK_TIMEOUT_MS);
-    };
-
-    resetChunkTimeout();
 
     try {
       while (true) {
         if (this.generation !== gen) return;
-        let chunk: { done: boolean; value?: Uint8Array };
-        try {
-          chunk = await reader.read();
-        } catch (e) {
-          if (
-            e instanceof Error &&
-            (e.name === "AbortError" || e.name === "CanceledError")
-          ) {
-            throw new Error("Stream timeout");
-          }
-          throw e;
-        }
+        const chunk = await reader.read();
         if (this.generation !== gen) return;
         const { done, value } = chunk;
         if (done) break;
-        resetChunkTimeout();
 
         if (value) {
           buffer += decoder.decode(value, { stream: true });
@@ -299,7 +271,6 @@ export class BenchmarkRunner {
         }
       }
     } finally {
-      if (chunkTimeoutId) clearTimeout(chunkTimeoutId);
       try {
         reader.releaseLock();
       } catch {}

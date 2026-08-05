@@ -1,13 +1,17 @@
-import type { KeyStore } from "../types.js";
-import type { ImportResult } from "../storage.js";
-import { loadStore, getDefaultStore, saveStore } from "../storage.js";
-import { getActiveTheme } from "../themes.js";
-import { logDebug } from "../logger.js";
-import { FILE_WATCHER_DEBOUNCE_MS } from "../constants.js";
-import type { Screen } from "./types.js";
-import type { CliRenderer } from "@opentui/core";
 import { watch, type FSWatcher } from "node:fs";
-import { resolveStorePath } from "../storage.js";
+import type { CliRenderer } from "@opentui/core";
+import { FILE_WATCHER_DEBOUNCE_MS } from "../constants.js";
+import { logDebug } from "../logger.js";
+import type { ImportResult } from "../storage.js";
+import {
+  getDefaultStore,
+  loadStore,
+  resolveStorePath,
+  saveStore,
+} from "../storage.js";
+import { getActiveTheme } from "../themes.js";
+import type { KeyStore } from "../types.js";
+import type { Screen } from "./types.js";
 
 export const state: {
   store: KeyStore;

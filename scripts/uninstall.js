@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-
-import { join } from "path";
-import { homedir } from "os";
 import { existsSync } from "fs";
-import { readFile, writeFile, unlink } from "fs/promises";
+import { readFile, unlink, writeFile } from "fs/promises";
+import { homedir } from "os";
+import { join } from "path";
 
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const CONFIG_PATH = join(CONFIG_DIR, "opencode.json");

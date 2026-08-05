@@ -1,15 +1,21 @@
-import { getActiveTheme, setPreviewTheme } from "../themes.js";
 import { logDebug } from "../logger.js";
 import {
-  exportKeys,
   applyImport,
+  exportKeys,
   resetFailures,
   toggleKey,
   writeExportFile,
 } from "../storage.js";
-import { safeSaveStore, stopFileWatcher } from "./state.js";
-import { state, navigate, callRenderApp, setStatus } from "./state.js";
+import { getActiveTheme, setPreviewTheme } from "../themes.js";
 import { BenchmarkRunner } from "./benchmark.js";
+import {
+  callRenderApp,
+  navigate,
+  safeSaveStore,
+  setStatus,
+  state,
+  stopFileWatcher,
+} from "./state.js";
 
 export function handleKeyAction(action: string): void {
   if (!state.selectedKeyId) return;

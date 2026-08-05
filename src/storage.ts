@@ -1,3 +1,16 @@
+// TUI-only file I/O helpers (not in store.ts because they deal with arbitrary user paths)
+
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, resolve } from "node:path";
+import type { ExportedKey, ExportPayload } from "./types.js";
+
 // Compatibility shim: re-exports store functions for TUI code that imports from "../storage.js".
 // The TUI screens/UI use these exports. Once TUI is fully migrated, this file can be deleted.
 
@@ -20,19 +33,6 @@ export {
 } from "./store.js";
 
 export type { ImportResult } from "./types.js";
-
-// TUI-only file I/O helpers (not in store.ts because they deal with arbitrary user paths)
-
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, resolve } from "node:path";
-import type { ExportPayload, ExportedKey } from "./types.js";
 
 const SYSTEM_PATH_PREFIXES = ["/etc/", "/proc/", "/sys/", "/dev/"];
 

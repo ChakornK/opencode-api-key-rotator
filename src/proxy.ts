@@ -1,11 +1,11 @@
-import type { KeyStore, KeyStoreConfig, SessionState } from "./types.js";
-import { getNextKey, saveStore } from "./store.js";
 import {
-  STREAM_IDLE_TIMEOUT_MS,
   CONNECT_TIMEOUT_MS,
   PORT_RETRY_ATTEMPTS,
+  STREAM_IDLE_TIMEOUT_MS,
 } from "./constants.js";
 import { logDebug } from "./logger.js";
+import { getNextKey, saveStore } from "./store.js";
+import type { KeyStore, KeyStoreConfig, SessionState } from "./types.js";
 
 export interface ProxyOptions {
   port: number;

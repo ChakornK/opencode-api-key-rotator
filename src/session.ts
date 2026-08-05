@@ -1,6 +1,6 @@
-import type { SessionPhase, SessionState } from "./types.js";
 import { SESSION_MAP_MAX_SIZE } from "./constants.js";
 import { logDebug } from "./logger.js";
+import type { SessionPhase, SessionState } from "./types.js";
 
 const VALID_TRANSITIONS: Record<SessionPhase, SessionPhase[]> = {
   idle: ["active"],

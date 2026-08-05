@@ -1,12 +1,12 @@
 import {
   existsSync,
-  readFileSync,
-  writeFileSync,
   mkdirSync,
+  readFileSync,
   renameSync,
+  writeFileSync,
 } from "node:fs";
-import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const STATE_DIR = join(homedir(), ".local", "state", "opencode");

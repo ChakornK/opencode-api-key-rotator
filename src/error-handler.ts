@@ -1,3 +1,16 @@
+import {
+  DEDUP_WINDOW_MS,
+  NETWORK_ERROR_THRESHOLD,
+  SERVER_ERROR_THRESHOLD,
+} from "./constants.js";
+import { logDebug } from "./logger.js";
+import type { SessionManager } from "./session.js";
+import {
+  getCooldownExpiry,
+  isModelAvailable,
+  recordModelCooldown,
+  resetPromotionFailures,
+} from "./store.js";
 import type {
   ErrorClass,
   ErrorEvent,
@@ -5,19 +18,6 @@ import type {
   KeyStore,
   SessionState,
 } from "./types.js";
-import type { SessionManager } from "./session.js";
-import {
-  DEDUP_WINDOW_MS,
-  SERVER_ERROR_THRESHOLD,
-  NETWORK_ERROR_THRESHOLD,
-} from "./constants.js";
-import {
-  isModelAvailable,
-  getCooldownExpiry,
-  recordModelCooldown,
-  resetPromotionFailures,
-} from "./store.js";
-import { logDebug } from "./logger.js";
 
 /** Extracts HTTP status code from an error object. Returns undefined if not found. */
 function extractStatusCode(error: unknown): number | undefined {

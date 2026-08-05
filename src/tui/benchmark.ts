@@ -1,6 +1,6 @@
-import type { FallbackModel } from "../types.js";
 import { SPINNER_INTERVAL_MS } from "../constants.js";
-import { state, callRenderApp } from "./state.js";
+import type { FallbackModel } from "../types.js";
+import { callRenderApp, state } from "./state.js";
 
 const NIM_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const FETCH_TIMEOUT_MS = 30_000;

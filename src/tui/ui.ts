@@ -1,10 +1,10 @@
-import { Select, Input } from "@opentui/core";
+import { Input, Select } from "@opentui/core";
 import type { VNode } from "@opentui/core";
 import {
-  getActiveTheme,
-  selectColors,
-  inputColors,
   applySelectColors,
+  getActiveTheme,
+  inputColors,
+  selectColors,
 } from "../themes.js";
 import type { RotatorTheme } from "../themes.js";
 import { state } from "./state.js";

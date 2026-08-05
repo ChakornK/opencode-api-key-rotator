@@ -1,48 +1,48 @@
-import { join } from "node:path";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { Box, Text } from "@opentui/core";
 import {
+  addKey,
+  readAndValidateImportFile,
+  removeKey,
+  renameKey,
+  validateImportPayload,
+} from "../storage.js";
+import {
+  dangerSelectColors,
   getActiveTheme,
-  getTheme,
   getResolvedTheme,
+  getTheme,
   getThemeOverride,
   listThemes,
   saveThemeOverride,
   setPreviewTheme,
-  dangerSelectColors,
 } from "../themes.js";
 import {
-  addKey,
-  readAndValidateImportFile,
-  validateImportPayload,
-  removeKey,
-  renameKey,
-} from "../storage.js";
+  fetchNimModels,
+  handleExport,
+  handleFallbackMenuSelect,
+  handleImportConfirm,
+  handleKeyAction,
+  handleMenuSelect,
+} from "./actions.js";
 import {
-  state,
-  navigate,
   callRenderApp,
-  refreshStore,
-  setStatus,
   clampIndex,
+  navigate,
+  refreshStore,
   safeSaveStore,
+  setStatus,
+  state,
 } from "./state.js";
-import {
-  themedSelect,
-  themedInput,
-  events,
-  maskKey,
-  applyThemeToScreen,
-} from "./ui.js";
 import type { ScreenContent, SelectOption } from "./types.js";
 import {
-  handleMenuSelect,
-  handleKeyAction,
-  handleExport,
-  handleImportConfirm,
-  handleFallbackMenuSelect,
-  fetchNimModels,
-} from "./actions.js";
+  applyThemeToScreen,
+  events,
+  maskKey,
+  themedInput,
+  themedSelect,
+} from "./ui.js";
 
 function keyStatus(entry: { enabled: boolean }): string {
   return !entry.enabled ? "OFF" : "OK";

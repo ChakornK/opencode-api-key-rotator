@@ -4,9 +4,9 @@ import {
   writeFileSync,
   mkdirSync,
   renameSync,
-} from "fs";
-import { join, dirname } from "path";
-import { homedir } from "os";
+} from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const STATE_DIR = join(homedir(), ".local", "state", "opencode");
@@ -437,7 +437,7 @@ const themes: Record<string, RotatorTheme> = {
 };
 
 export function getTheme(id: string): RotatorTheme {
-  return themes[id] ?? themes["opencode"]!;
+  return themes[id] ?? themes.opencode!;
 }
 
 export function listThemes(): RotatorTheme[] {
@@ -454,7 +454,7 @@ export function getResolvedTheme(): RotatorTheme {
   if (opencodeThemeId && themes[opencodeThemeId]) {
     return themes[opencodeThemeId];
   }
-  return themes["opencode"]!;
+  return themes.opencode!;
 }
 
 const THEME_OVERRIDE_PATH = join(CONFIG_DIR, "nim-rotator-theme.json");
@@ -476,8 +476,8 @@ export function saveThemeOverride(themeId: string): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    const tmpPath = THEME_OVERRIDE_PATH + ".tmp." + crypto.randomUUID();
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + "\n", {
+    const tmpPath = `${THEME_OVERRIDE_PATH}.tmp.${crypto.randomUUID()}`;
+    writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, {
       mode: 0o600,
     });
     renameSync(tmpPath, THEME_OVERRIDE_PATH);

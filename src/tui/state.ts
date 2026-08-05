@@ -6,7 +6,7 @@ import { logDebug } from "../logger.js";
 import { FILE_WATCHER_DEBOUNCE_MS } from "../constants.js";
 import type { Screen } from "./types.js";
 import type { CliRenderer } from "@opentui/core";
-import { watch, type FSWatcher } from "fs";
+import { watch, type FSWatcher } from "node:fs";
 import { resolveStorePath } from "../storage.js";
 
 export const state: {
@@ -134,7 +134,7 @@ export function safeSaveStore(): boolean {
   } catch (err) {
     console.error("[nim-rotator] Save failed:", err);
     setStatus(
-      "Save failed: " + (err instanceof Error ? err.message : "Unknown error"),
+      `Save failed: ${err instanceof Error ? err.message : "Unknown error"}`,
       getActiveTheme().error,
     );
     callRenderApp();

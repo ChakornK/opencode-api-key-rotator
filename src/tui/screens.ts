@@ -1,5 +1,5 @@
-import { join } from "path";
-import { homedir } from "os";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { Box, Text } from "@opentui/core";
 import {
   getActiveTheme,
@@ -40,10 +40,8 @@ import {
   handleKeyAction,
   handleExport,
   handleImportConfirm,
-  handleFallbackChainKey,
   handleFallbackMenuSelect,
   fetchNimModels,
-  addFallbackModel,
 } from "./actions.js";
 
 function keyStatus(entry: { enabled: boolean }): string {
@@ -634,7 +632,7 @@ export function buildConfirmImport(): ScreenContent {
 // ---------------------------------------------------------------------------
 
 export function buildFallbackMenu(): ScreenContent {
-  const theme = getActiveTheme();
+  const _theme = getActiveTheme();
   const chain = state.store.fallbackChain;
 
   const opts: (SelectOption | false)[] = [
@@ -837,7 +835,7 @@ export function buildFallbackChain(): ScreenContent {
     const nameWidth = listWidth - 4;
     const displayName =
       model.name.length > nameWidth
-        ? model.name.slice(0, nameWidth - 3) + "..."
+        ? `${model.name.slice(0, nameWidth - 3)}...`
         : model.name;
 
     items.push(

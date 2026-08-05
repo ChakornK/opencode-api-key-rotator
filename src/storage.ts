@@ -30,8 +30,8 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
-} from "fs";
-import { dirname, resolve } from "path";
+} from "node:fs";
+import { dirname, resolve } from "node:path";
 import type { ExportPayload, ExportedKey } from "./types.js";
 
 const SYSTEM_PATH_PREFIXES = ["/etc/", "/proc/", "/sys/", "/dev/"];
@@ -55,9 +55,9 @@ export function writeExportFile(
   if (pathError) throw new Error(pathError);
   const dir = dirname(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmpPath = filePath + ".tmp." + crypto.randomUUID();
+  const tmpPath = `${filePath}.tmp.${crypto.randomUUID()}`;
   try {
-    writeFileSync(tmpPath, JSON.stringify(payload, null, 2) + "\n", {
+    writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, {
       mode: 0o600,
     });
     renameSync(tmpPath, filePath);

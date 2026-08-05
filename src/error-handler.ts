@@ -176,7 +176,7 @@ export async function handleError(
     promptSession,
   } = deps;
   const session = sessionManager.getIfExists(event.sessionID);
-  if (!session || !session.currentModelId) return;
+  if (!session?.currentModelId) return;
 
   // Phase guard
   if (session.phase === "retrying") return;

@@ -5,9 +5,9 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
-} from "fs";
-import { join, dirname } from "path";
-import { homedir } from "os";
+} from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 import type {
   ApiKeyEntry,
   ExportPayload,
@@ -128,7 +128,7 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
 /** Saves the store with merge-on-save strategy. Acquires advisory lock (best-effort). */
 export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
   const storePath = resolveStorePath(config);
-  const lockPath = storePath + ".lock";
+  const lockPath = `${storePath}.lock`;
   let lockAcquired = false;
 
   // Best-effort advisory lock
@@ -180,9 +180,9 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
     // Atomic write
     const dir = dirname(storePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const tmpPath = storePath + ".tmp." + crypto.randomUUID();
+    const tmpPath = `${storePath}.tmp.${crypto.randomUUID()}`;
     try {
-      writeFileSync(tmpPath, JSON.stringify(toWrite, null, 2) + "\n", {
+      writeFileSync(tmpPath, `${JSON.stringify(toWrite, null, 2)}\n`, {
         mode: 0o600,
       });
       renameSync(tmpPath, storePath);
@@ -384,7 +384,7 @@ export function recordModelCooldown(modelId: string): void {
   promotionFailureCounts.set(modelId, pf);
 
   const cooldown = Math.min(
-    MODEL_COOLDOWN_BASE_MS * Math.pow(COOLDOWN_ESCALATION_FACTOR, pf.count - 1),
+    MODEL_COOLDOWN_BASE_MS * COOLDOWN_ESCALATION_FACTOR ** (pf.count - 1),
     MODEL_COOLDOWN_MAX_MS,
   );
   modelCooldowns.set(modelId, now + cooldown);

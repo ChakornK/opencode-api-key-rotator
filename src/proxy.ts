@@ -153,7 +153,7 @@ export function startProxy(options: ProxyOptions): ProxyServer | null {
       });
       boundPort = server.port ?? tryPort;
       break;
-    } catch (err) {
+    } catch (_err) {
       if (attempt === PORT_RETRY_ATTEMPTS) {
         logDebug(
           `proxy failed to bind after ${PORT_RETRY_ATTEMPTS + 1} attempts`,

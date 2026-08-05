@@ -1,6 +1,6 @@
-import { appendFileSync, mkdirSync, existsSync } from "fs";
-import { dirname, join } from "path";
-import { homedir } from "os";
+import { appendFileSync, mkdirSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 const DEBUG_LOG_PATH = join(
   homedir(),

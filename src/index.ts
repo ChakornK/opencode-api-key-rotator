@@ -126,7 +126,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
   async function promptSession(
     sessionID: string,
     modelId: string,
-    session: SessionState,
+    _session: SessionState,
   ): Promise<void> {
     const messagesResult = await client.session.messages({
       path: { id: sessionID },
@@ -191,7 +191,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
           type: "api",
           label: "Enter NVIDIA NIM API Key",
           async authorize(inputs) {
-            const key = inputs?.["apiKey"];
+            const key = inputs?.apiKey;
             if (!key) return { type: "failed" };
             try {
               const res = await fetch(`${NIM_BASE_URL}/v1/models`, {

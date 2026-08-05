@@ -14,6 +14,7 @@
     "prepare": "npm run build",
     "postinstall": "node scripts/postinstall.js",
     "uninstall": "node scripts/uninstall.js",
+    "lint": "biome lint src/",
     "format": "prettier -w ."
   },
   "keywords": [
@@ -44,6 +45,7 @@
     "@opentui/core": "^0.4.2"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.7",
     "@types/bun": "^1.3.14",
     "prettier": "^3.8.4",
     "typescript": "6.0.3"

@@ -82,13 +82,8 @@ export const NvidiaNimKeyRotator: Plugin = async (
   // Helper: check if session is a subagent
   async function isSubagentSession(sessionID: string): Promise<boolean> {
     try {
-      const res = await (client.session as any).get({
-        path: { id: sessionID },
-      });
-      const data =
-        res && typeof res === "object" && "data" in res ? res.data : res;
-      if (!data || typeof data !== "object") return false;
-      return !!(data as Record<string, unknown>).parentID;
+      const res = await client.session.get({ path: { id: sessionID } });
+      return !!res.data?.parentID;
     } catch {
       return false;
     }
@@ -175,12 +170,16 @@ export const NvidiaNimKeyRotator: Plugin = async (
   }
 
   const hooks: Hooks = {
-    config: async (cfg: any) => {
+    config: async (cfg) => {
       if (proxy) {
-        if (!cfg.provider) cfg.provider = {};
-        if (!cfg.provider.nvidia) cfg.provider.nvidia = {};
-        if (!cfg.provider.nvidia.options) cfg.provider.nvidia.options = {};
-        cfg.provider.nvidia.options.baseURL = `http://localhost:${proxy.port}`;
+        const c = cfg as Record<
+          string,
+          Record<string, Record<string, Record<string, unknown>>>
+        >;
+        if (!c.provider) c.provider = {};
+        if (!c.provider.nvidia) c.provider.nvidia = {};
+        if (!c.provider.nvidia.options) c.provider.nvidia.options = {};
+        c.provider.nvidia.options.baseURL = `http://localhost:${proxy.port}`;
       }
     },
 

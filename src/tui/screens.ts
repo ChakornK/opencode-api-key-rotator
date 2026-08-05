@@ -1,50 +1,48 @@
-import { join } from "path";
-import { homedir } from "os";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Box, Text } from "@opentui/core";
 import {
+  addKey,
+  readAndValidateImportFile,
+  removeKey,
+  renameKey,
+  validateImportPayload,
+} from "../storage.js";
+import {
+  dangerSelectColors,
   getActiveTheme,
-  getTheme,
   getResolvedTheme,
+  getTheme,
   getThemeOverride,
   listThemes,
   saveThemeOverride,
   setPreviewTheme,
-  dangerSelectColors,
 } from "../themes.js";
 import {
-  addKey,
-  readAndValidateImportFile,
-  validateImportPayload,
-  removeKey,
-  renameKey,
-} from "../storage.js";
+  fetchNimModels,
+  handleExport,
+  handleFallbackMenuSelect,
+  handleImportConfirm,
+  handleKeyAction,
+  handleMenuSelect,
+} from "./actions.js";
 import {
-  state,
-  navigate,
   callRenderApp,
-  refreshStore,
-  setStatus,
   clampIndex,
+  navigate,
+  refreshStore,
   safeSaveStore,
+  setStatus,
+  state,
 } from "./state.js";
-import {
-  themedSelect,
-  themedInput,
-  events,
-  maskKey,
-  applyThemeToScreen,
-} from "./ui.js";
 import type { ScreenContent, SelectOption } from "./types.js";
 import {
-  handleMenuSelect,
-  handleKeyAction,
-  handleExport,
-  handleImportConfirm,
-  handleFallbackChainKey,
-  handleFallbackMenuSelect,
-  fetchNimModels,
-  addFallbackModel,
-} from "./actions.js";
+  applyThemeToScreen,
+  events,
+  maskKey,
+  themedInput,
+  themedSelect,
+} from "./ui.js";
 
 function keyStatus(entry: { enabled: boolean }): string {
   return !entry.enabled ? "OFF" : "OK";
@@ -634,7 +632,7 @@ export function buildConfirmImport(): ScreenContent {
 // ---------------------------------------------------------------------------
 
 export function buildFallbackMenu(): ScreenContent {
-  const theme = getActiveTheme();
+  const _theme = getActiveTheme();
   const chain = state.store.fallbackChain;
 
   const opts: (SelectOption | false)[] = [
@@ -837,7 +835,7 @@ export function buildFallbackChain(): ScreenContent {
     const nameWidth = listWidth - 4;
     const displayName =
       model.name.length > nameWidth
-        ? model.name.slice(0, nameWidth - 3) + "..."
+        ? `${model.name.slice(0, nameWidth - 3)}...`
         : model.name;
 
     items.push(

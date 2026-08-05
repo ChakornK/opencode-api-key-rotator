@@ -1,6 +1,21 @@
+export type RotationStrategy = "round-robin" | "least-failures";
+
+export type SessionPhase = "idle" | "active" | "failing" | "retrying";
+
+export type ErrorClass =
+  | "rate_limit"
+  | "server_error"
+  | "timeout"
+  | "auth"
+  | "model_invalid"
+  | "network"
+  | "non_retryable";
+
+export type BenchmarkStatus = "idle" | "running" | "done" | "error";
+
 export interface ModelBlacklistEntry {
-  readonly blacklistedUntil: number;
-  readonly nextDurationMs: number;
+  blacklistedUntil: number;
+  nextDurationMs: number;
 }
 
 export interface ApiKeyEntry {
@@ -11,7 +26,7 @@ export interface ApiKeyEntry {
   lastUsedAt?: number;
   rateLimitCount: number;
   enabled: boolean;
-  modelBlacklist?: { [modelId: string]: ModelBlacklistEntry };
+  modelBlacklist?: Record<string, ModelBlacklistEntry>;
 }
 
 export interface FallbackModel {
@@ -19,18 +34,18 @@ export interface FallbackModel {
   name: string;
   benchmarkTtfb?: number;
   benchmarkTps?: number;
-  benchmarkStatus?: "idle" | "running" | "done" | "error";
+  benchmarkStatus?: BenchmarkStatus;
   benchmarkError?: string;
 }
 
 export interface KeyStore {
   keys: ApiKeyEntry[];
-  currentIndex: number;
-  rotationStrategy: "round-robin" | "least-failures";
+  rotationStrategy: RotationStrategy;
   updatedAt: number;
   lastUsedKeyId?: string;
   fallbackChain: FallbackModel[];
   maxRateLimitFailures: number;
+  theme?: string;
 }
 
 export interface ExportedKey {
@@ -44,7 +59,37 @@ export interface ExportPayload {
   keys: ExportedKey[];
 }
 
-export type KeyStoreConfig = {
+export interface ImportResult {
+  added: number;
+  skipped: number;
+  errors: string[];
+  pendingKeys: ExportedKey[];
+}
+
+export interface KeyStoreConfig {
   storePath?: string;
-  rotationStrategy?: "round-robin" | "least-failures";
-};
+  rotationStrategy?: RotationStrategy;
+}
+
+export interface SessionState {
+  readonly isSubagent: boolean;
+  phase: SessionPhase;
+  chainIndex: number;
+  rateLimitCount: number;
+  serverErrorCount: number;
+  currentModelId: string | undefined;
+  lastUserMessageID: string | undefined;
+  lastFailedModelId: string | undefined;
+  retryAttempt: number;
+  fallbacksTriggered: number;
+  lastErrorFingerprint: string | undefined;
+  lastErrorAt: number;
+  createdAt: number;
+  markedForDeletion: boolean;
+}
+
+export interface ErrorEvent {
+  sessionID: string;
+  error: unknown;
+  source: "session.error" | "session.status.retry" | "session.next.step.failed";
+}

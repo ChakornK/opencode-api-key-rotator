@@ -1,24 +1,32 @@
-import { appendFileSync, mkdirSync, existsSync } from "fs";
-import { dirname } from "path";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
-export const DEBUG_LOG_PATH =
-  "/home/chakorn/.config/opencode/nim-rotator-debug.log";
+const DEBUG_LOG_PATH = join(
+  homedir(),
+  ".config",
+  "opencode",
+  "nim-rotator-debug.log",
+);
 
-function ensureDir(filePath: string) {
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-}
+let dirEnsured = false;
 
-export function logDebug(message: string) {
+/** Appends a timestamped debug line to the log file. Never throws. */
+export function logDebug(message: string): void {
   try {
-    ensureDir(DEBUG_LOG_PATH);
+    if (!dirEnsured) {
+      const dir = dirname(DEBUG_LOG_PATH);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      dirEnsured = true;
+    }
     const timestamp = new Date().toISOString();
     appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] ${message}\n`, {
       encoding: "utf-8",
+      mode: 0o600,
     });
   } catch {
-    // If we can't write to the file, silently ignore to avoid breaking the plugin
+    // Silently ignores write failures to avoid disrupting the plugin.
   }
 }

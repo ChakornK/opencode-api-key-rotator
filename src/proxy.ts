@@ -1,218 +1,221 @@
-import type { KeyStore, KeyStoreConfig } from "./types.js";
 import {
-  getNextKey,
-  saveStore,
-  loadStore,
-  recordRateLimit,
-  recordModelRateLimit,
-} from "./storage.js";
-
+  CONNECT_TIMEOUT_MS,
+  PORT_RETRY_ATTEMPTS,
+  STREAM_IDLE_TIMEOUT_MS,
+} from "./constants.js";
 import { logDebug } from "./logger.js";
-
-const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const PROXY_TIMEOUT_MS = 120_000; // 2 minutes
-
-export interface ProxyState {
-  activeChainModelId: string | undefined;
-  currentModelId: string | undefined;
-}
+import { getNextKey, saveStore } from "./store.js";
+import type { KeyStore, KeyStoreConfig, SessionState } from "./types.js";
 
 export interface ProxyOptions {
   port: number;
   store: KeyStore;
-  sessions: Map<string, ProxyState>;
   config?: KeyStoreConfig;
+  sessions: Map<string, SessionState>;
   targetUrl?: string;
-  onRateLimit?: (sessionID: string, modelId: string) => void;
 }
 
-export function startProxy(options: ProxyOptions) {
-  const { store, sessions, onRateLimit, config } = options;
-  const targetBaseUrl = options.targetUrl ?? DEFAULT_NVIDIA_BASE_URL;
+export interface ProxyServer {
+  readonly port: number;
+  stop(): void;
+}
 
-  // Track 429 counts per session to trigger fallback from proxy level
-  const session429Counts = new Map<string, number>();
+const DEFAULT_TARGET_URL = "https://integrate.api.nvidia.com/v1";
 
-  // Helper to reload store from disk before saving, to avoid overwriting
-  // changes made by other processes (e.g., the TUI).
-  function safeSaveStore() {
+/** Starts the local proxy server. Retries up to PORT_RETRY_ATTEMPTS on EADDRINUSE. */
+export function startProxy(options: ProxyOptions): ProxyServer | null {
+  const { store, sessions, config } = options;
+  const targetBaseUrl = options.targetUrl ?? DEFAULT_TARGET_URL;
+  let boundPort = 0;
+  let server: ReturnType<typeof Bun.serve> | null = null;
+
+  // Try binding on the configured port, then port+1..+5
+  for (let attempt = 0; attempt <= PORT_RETRY_ATTEMPTS; attempt++) {
+    const tryPort = options.port + attempt;
     try {
-      const fresh = loadStore(config);
-      if (fresh) {
-        // Copy proxy-managed fields into the fresh store
-        fresh.currentIndex = store.currentIndex;
-        fresh.lastUsedKeyId = store.lastUsedKeyId;
-        // keys may have been updated by TUI, so don't copy them
-        // fallbackChain may have been updated by TUI, so don't copy it
-        saveStore(fresh, config);
-      } else {
-        saveStore(store, config);
+      server = Bun.serve({
+        port: tryPort,
+        hostname: "127.0.0.1",
+        idleTimeout: 0,
+        async fetch(req) {
+          const url = new URL(req.url);
+          const sessionID = req.headers.get("x-nim-rotator-session-id");
+
+          try {
+            let bodyText: string | undefined;
+            let targetModel: string | undefined;
+
+            if (req.body) {
+              bodyText = await req.text();
+              try {
+                const parsed = JSON.parse(bodyText) as Record<string, unknown>;
+                targetModel =
+                  typeof parsed.model === "string" ? parsed.model : undefined;
+
+                // Rewrite model from session state if available
+                if (sessionID) {
+                  const session = sessions.get(sessionID);
+                  if (
+                    session?.currentModelId &&
+                    session.currentModelId !== targetModel
+                  ) {
+                    parsed.model = session.currentModelId;
+                    targetModel = session.currentModelId;
+                    bodyText = JSON.stringify(parsed);
+                  }
+                }
+              } catch {
+                // Non-JSON body — forward as-is
+              }
+            }
+
+            // Strip /v1 prefix to avoid duplication (target already includes /v1)
+            let upstreamPath = url.pathname;
+            if (upstreamPath === "/v1") upstreamPath = "";
+            else if (upstreamPath.startsWith("/v1/"))
+              upstreamPath = upstreamPath.slice(3);
+
+            const upstream = `${targetBaseUrl}${upstreamPath}${url.search}`;
+
+            const headers = new Headers(req.headers);
+            headers.delete("x-nim-rotator-session-id");
+            headers.delete("host");
+
+            // Key rotation
+            const next = getNextKey(store, config, targetModel);
+            if (!next) {
+              return new Response(
+                JSON.stringify({
+                  error: { message: "All API keys exhausted" },
+                }),
+                {
+                  status: 503,
+                  headers: { "Content-Type": "application/json" },
+                },
+              );
+            }
+            headers.set("Authorization", `Bearer ${next.key.key}`);
+
+            // Forward with connect timeout
+            const controller = new AbortController();
+            const connectTimer = setTimeout(
+              () => controller.abort(),
+              CONNECT_TIMEOUT_MS,
+            );
+
+            let response: Response;
+            try {
+              response = await fetch(upstream, {
+                method: req.method,
+                headers,
+                body: bodyText,
+                signal: controller.signal,
+              });
+            } finally {
+              clearTimeout(connectTimer);
+            }
+
+            // Handle 401/403: disable key immediately
+            if (response.status === 401 || response.status === 403) {
+              next.key.enabled = false;
+              try {
+                saveStore(store, config);
+              } catch {
+                logDebug("failed to save store after key disable");
+              }
+              return response;
+            }
+
+            // 429: pass through unmodified — no counting, no callbacks
+            if (response.status === 429) {
+              return response;
+            }
+
+            // Streaming stall detection for SSE responses
+            const contentType = response.headers.get("content-type") ?? "";
+            if (contentType.includes("text/event-stream") && response.body) {
+              return handleStreamingResponse(response);
+            }
+
+            return response;
+          } catch (error) {
+            return new Response(
+              JSON.stringify({
+                error: {
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                },
+              }),
+              { status: 502, headers: { "Content-Type": "application/json" } },
+            );
+          }
+        },
+      });
+      boundPort = server.port ?? tryPort;
+      break;
+    } catch (_err) {
+      if (attempt === PORT_RETRY_ATTEMPTS) {
+        logDebug(
+          `proxy failed to bind after ${PORT_RETRY_ATTEMPTS + 1} attempts`,
+        );
+        return null;
       }
-    } catch (err) {
-      logDebug(
-        `[nim-rotator] safeSaveStore failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      // Try next port
     }
   }
 
-  const server = Bun.serve({
-    port: options.port,
-    idleTimeout: 0,
-    async fetch(req) {
-      const url = new URL(req.url);
-      const sessionID = req.headers.get("x-nim-rotator-session-id");
+  if (!server) return null;
 
-      logDebug(
-        `[nim-rotator] Proxy received request: ${req.method} ${url.pathname} sessionID=${sessionID ?? "none"}`,
-      );
+  return {
+    get port() {
+      return boundPort;
+    },
+    stop() {
+      server?.stop(true);
+    },
+  };
+}
 
+/** Wraps a streaming response with idle timeout detection. */
+function handleStreamingResponse(response: Response): Response {
+  const reader = response.body!.getReader();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let aborted = false;
+
+  const stream = new ReadableStream({
+    async pull(controller) {
+      const resetTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          aborted = true;
+          reader.cancel("streaming stall timeout");
+          controller.close();
+        }, STREAM_IDLE_TIMEOUT_MS);
+      };
+
+      resetTimer();
       try {
-        // Read and potentially modify the request body
-        let bodyText: string | undefined;
-        let targetModel: string | undefined;
-
-        if (req.body) {
-          bodyText = await req.text();
-          try {
-            const parsedBody = JSON.parse(bodyText) as Record<string, unknown>;
-            targetModel = parsedBody.model as string | undefined;
-
-            // Check if this session has a fallback model configured
-            if (sessionID) {
-              const state = sessions.get(sessionID);
-              if (
-                state?.activeChainModelId &&
-                state.activeChainModelId !== targetModel
-              ) {
-                parsedBody.model = state.activeChainModelId;
-                targetModel = state.activeChainModelId;
-                bodyText = JSON.stringify(parsedBody);
-              }
-            }
-          } catch {
-            // Not JSON, use original body as-is
-          }
+        const { done, value } = await reader.read();
+        if (idleTimer) clearTimeout(idleTimer);
+        if (done || aborted) {
+          controller.close();
+          return;
         }
-
-        // Strip /v1 prefix from incoming path to avoid duplication
-        // when appending to targetBaseUrl which already includes /v1
-        let upstreamPath = url.pathname;
-        if (upstreamPath === "/v1") upstreamPath = "";
-        else if (upstreamPath.startsWith("/v1/"))
-          upstreamPath = upstreamPath.replace(/^\/v1/, "");
-
-        const upstream = `${targetBaseUrl}${upstreamPath}${url.search}`;
-
-        // Forward the request
-        const headers = new Headers(req.headers);
-        // Remove our custom header and host before forwarding
-        headers.delete("x-nim-rotator-session-id");
-        headers.delete("host");
-
-        // Handle API key rotation in the proxy
-        const modelIdForRotation = targetModel;
-        const next = getNextKey(store, config, modelIdForRotation);
-        logDebug(
-          `[nim-rotator] Proxy key lookup: modelId=${modelIdForRotation ?? "none"}, found=${next !== null}, keyId=${next?.key.id ?? "none"}`,
-        );
-        if (next) {
-          const authValue = `Bearer ${next.key.key}`;
-          headers.set("Authorization", authValue);
-          logDebug(
-            `[nim-rotator] Proxy set Authorization header: ${authValue.substring(0, 20)}...`,
-          );
-          try {
-            safeSaveStore();
-          } catch (err) {
-            logDebug(
-              `[nim-rotator] Failed to save store after key rotation: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        } else {
-          logDebug(
-            `[nim-rotator] Proxy: no active key found, not setting Authorization header`,
-          );
-        }
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
-
-        let response: Response;
-        try {
-          response = await fetch(upstream, {
-            method: req.method,
-            headers,
-            body: bodyText,
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeout);
-        }
-
-        // Check for rate limit and notify
-        if (response.status === 429 && sessionID && targetModel) {
-          onRateLimit?.(sessionID, targetModel);
-          // Also record rate limit for the key that was just used
-          const errorKeyId = store.lastUsedKeyId;
-          if (errorKeyId) {
-            recordRateLimit(store, errorKeyId);
-            recordModelRateLimit(store, errorKeyId, targetModel);
-            try {
-              safeSaveStore();
-            } catch (err) {
-              logDebug(
-                `[nim-rotator] Failed to save store after rate limit: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          }
-
-          // Track 429 count for this session and trigger fallback if needed
-          const currentCount = (session429Counts.get(sessionID) || 0) + 1;
-          session429Counts.set(sessionID, currentCount);
-          logDebug(
-            `[nim-rotator] Proxy 429 count for session ${sessionID}: ${currentCount}/${store.maxRateLimitFailures || 3}`,
-          );
-
-          if (currentCount >= (store.maxRateLimitFailures || 3)) {
-            // Find the next model in the fallback chain
-            const chain = store.fallbackChain;
-            const currentIndex = chain.findIndex((m) => m.id === targetModel);
-            logDebug(
-              `[nim-rotator] Proxy fallback check: targetModel=${targetModel}, chainIndex=${currentIndex}, chainLength=${chain.length}`,
-            );
-            if (currentIndex >= 0 && currentIndex < chain.length - 1) {
-              const nextModel = chain[currentIndex + 1];
-              const proxyState = sessions.get(sessionID) || {
-                activeChainModelId: undefined,
-                currentModelId: undefined,
-              };
-              proxyState.activeChainModelId = nextModel.id;
-              sessions.set(sessionID, proxyState);
-              logDebug(
-                `[nimQr-rotator] Proxy triggered fallback: ${targetModel} -> ${nextModel.id}`,
-              );
-            }
-          }
-        } else if (sessionID) {
-          // Reset 429 count on successful/non-429 response
-          session429Counts.delete(sessionID);
-        }
-
-        return response;
-      } catch (error) {
-        return new Response(
-          JSON.stringify({
-            error: "Proxy error",
-            message: error instanceof Error ? error.message : String(error),
-          }),
-          {
-            status: 502,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+        controller.enqueue(value);
+      } catch {
+        if (idleTimer) clearTimeout(idleTimer);
+        controller.close();
       }
+    },
+    cancel() {
+      if (idleTimer) clearTimeout(idleTimer);
+      reader.cancel();
     },
   });
 
-  return { server, port: server.port ?? options.port };
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }

@@ -2,34 +2,48 @@ import { Box, Text } from "@opentui/core";
 import pkg from "../../package.json";
 import { getActiveKeys } from "../storage.js";
 import { getActiveTheme, setPreviewTheme } from "../themes.js";
-import { state, setNavigate, setRenderApp, callRenderApp } from "./state.js";
-import type { Screen } from "./types.js";
 import {
-  buildMainMenu,
-  buildKeySelector,
-  buildKeyActions,
-  buildThemeSelector,
-  buildConfirmDelete,
-  buildAddNameInput,
-  buildAddKeyInput,
-  buildRenameInput,
-  buildExportPathInput,
-  buildImportPathInput,
-  buildConfirmImport,
-  buildFallbackMenu,
-  buildFallbackChain,
-  buildFallbackSettings,
-  buildModelSelector,
-  getFilteredModelsForSelector,
-} from "./screens.js";
-import type { ScreenContent } from "./types.js";
-import {
-  handleFallbackChainKey,
   addFallbackModel,
   cancelBenchmark,
+  handleFallbackChainKey,
 } from "./actions.js";
+import {
+  buildAddKeyInput,
+  buildAddNameInput,
+  buildConfirmDelete,
+  buildConfirmImport,
+  buildExportPathInput,
+  buildFallbackChain,
+  buildFallbackMenu,
+  buildFallbackSettings,
+  buildImportPathInput,
+  buildKeyActions,
+  buildKeySelector,
+  buildMainMenu,
+  buildModelSelector,
+  buildRenameInput,
+  buildThemeSelector,
+  getFilteredModelsForSelector,
+} from "./screens.js";
+import {
+  callRenderApp,
+  safeSaveStore,
+  sanitizeBenchmarkState,
+  setNavigate,
+  setRenderApp,
+  startFileWatcher,
+  state,
+  stopFileWatcher,
+} from "./state.js";
+import type { Screen, ScreenContent } from "./types.js";
 
 export function initApp(): void {
+  // Startup sanitization: reset stale "running" benchmark states from previous crashes
+  sanitizeBenchmarkState();
+
+  // Start file watcher for external store changes
+  startFileWatcher();
+
   // Wire up navigation and render loop
   setNavigate((screen: Screen) => {
     state.currentScreen = screen;
@@ -108,6 +122,9 @@ export function initApp(): void {
       }
 
       if (key.ctrl && key.name === "c") {
+        cancelBenchmark();
+        safeSaveStore();
+        stopFileWatcher();
         if (state.renderer) state.renderer.destroy();
         process.exit(0);
       }

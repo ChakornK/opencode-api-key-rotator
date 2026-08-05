@@ -1,11 +1,11 @@
+import { SPINNER_INTERVAL_MS } from "../constants.js";
 import type { FallbackModel } from "../types.js";
-import { state, callRenderApp } from "./state.js";
+import { callRenderApp, state } from "./state.js";
 
 const NIM_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const FETCH_TIMEOUT_MS = 30_000;
 const STREAM_CHUNK_TIMEOUT_MS = 30_000;
 const TPS_UPDATE_INTERVAL_MS = 2_000;
-const SPINNER_INTERVAL_MS = 80;
 const CHARS_PER_TOKEN = 4;
 
 export interface BenchmarkMetrics {
@@ -28,6 +28,7 @@ export interface BenchmarkState {
   error: string | undefined;
 }
 
+/** Runs a streaming benchmark against a single model. Supports cancellation via generation counter. */
 export class BenchmarkRunner {
   private generation = 0;
   private controller: AbortController | null = null;
@@ -55,19 +56,15 @@ export class BenchmarkRunner {
   get phase(): BenchmarkPhase {
     return this._phase;
   }
-
   get metrics(): BenchmarkMetrics {
     return { ...this._metrics };
   }
-
   get error(): string | undefined {
     return this._error;
   }
-
   get modelId(): string | undefined {
     return this._modelId;
   }
-
   get isRunning(): boolean {
     return this._phase === "connecting" || this._phase === "streaming";
   }
@@ -80,18 +77,22 @@ export class BenchmarkRunner {
     };
   }
 
+  /** Cancels in-flight work. Bumps generation to invalidate stale continuations. Evicts from map. */
   cancel(): void {
+    this.generation++;
     this._cancelled = true;
-    if (this.controller) {
-      this.controller.abort();
-    }
+    if (this.controller) this.controller.abort();
     this.teardown();
     this._phase = "cancelled";
     this._error = undefined;
+    // Evict from runners map immediately
+    if (this._modelId) state.benchmarkRunners.delete(this._modelId);
+    callRenderApp();
   }
 
+  /** Executes the benchmark. Returns final state. Checks generation after every await. */
   async run(model: FallbackModel, apiKey: string): Promise<BenchmarkState> {
-    this.cancel();
+    this.teardown();
     this.generation++;
     const gen = this.generation;
     this._cancelled = false;
@@ -101,22 +102,16 @@ export class BenchmarkRunner {
     this._metrics = { ttfb: undefined, tps: undefined, tokenCount: 0 };
     this._error = undefined;
     this._modelId = model.id;
+    this.lastGoodTps = undefined;
 
     this.startSpinner();
 
     try {
       await this.execute(model, apiKey, gen);
-
-      if (this.generation !== gen) {
-        return this.getState();
-      }
-
+      if (this.generation !== gen) return this.getState();
       this._phase = "done";
     } catch (err) {
-      if (this.generation !== gen) {
-        return this.getState();
-      }
-
+      if (this.generation !== gen) return this.getState();
       if (this._cancelled) {
         this._phase = "cancelled";
         this._error = undefined;
@@ -125,14 +120,13 @@ export class BenchmarkRunner {
         this._error = err instanceof Error ? err.message : "Benchmark failed";
       }
     } finally {
-      if (this.generation === gen) {
-        this.teardown();
-      }
+      if (this.generation === gen) this.teardown();
     }
 
     return this.getState();
   }
 
+  /** Writes benchmark results to the provided model reference. Caller must re-resolve model by ID. */
   applyResultToModel(model: FallbackModel): void {
     if (this._phase === "done") {
       model.benchmarkStatus = "done";
@@ -175,7 +169,6 @@ export class BenchmarkRunner {
   ): Promise<void> {
     const signal = this.controller!.signal;
     const startTime = Date.now();
-
     const fetchTimeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
     const combinedSignal = AbortSignal.any([signal, fetchTimeout]);
 
@@ -202,19 +195,16 @@ export class BenchmarkRunner {
 
     if (this.generation !== gen) return;
 
+    // Only record TTFB if response is successful
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
     const firstByteTime = Date.now();
     this._metrics.ttfb = firstByteTime - startTime;
     this._phase = "streaming";
     callRenderApp();
 
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-
     const reader = res.body?.getReader();
-    if (!reader) {
-      throw new Error("Response body is empty");
-    }
+    if (!reader) throw new Error("Response body is empty");
 
     await this.readStream(reader, gen, firstByteTime);
   }
@@ -250,7 +240,6 @@ export class BenchmarkRunner {
     try {
       while (true) {
         if (this.generation !== gen) return;
-
         let chunk: { done: boolean; value?: Uint8Array };
         try {
           chunk = await reader.read();
@@ -263,19 +252,15 @@ export class BenchmarkRunner {
           }
           throw e;
         }
-
         if (this.generation !== gen) return;
-
         const { done, value } = chunk;
         if (done) break;
-
         resetChunkTimeout();
 
         if (value) {
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
-
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed.startsWith("data: ")) continue;
@@ -287,9 +272,7 @@ export class BenchmarkRunner {
               if (content) {
                 charCount += content.length;
                 contentChunks++;
-                if (streamStart === 0) {
-                  streamStart = ttfbTime;
-                }
+                if (streamStart === 0) streamStart = ttfbTime;
               }
             } catch {}
           }
@@ -302,16 +285,14 @@ export class BenchmarkRunner {
           Math.round(charCount / CHARS_PER_TOKEN),
         );
         this._metrics.tokenCount = estimatedTokens;
-
         const now = Date.now();
         const elapsed = Math.max(1, now - streamStart);
         const calculatedTps = (estimatedTokens / elapsed) * 1000;
 
-        if (lastTpsUpdate === 0) {
-          this.setTps(calculatedTps);
-          lastTpsUpdate = now;
-          callRenderApp();
-        } else if (now - lastTpsUpdate >= TPS_UPDATE_INTERVAL_MS) {
+        if (
+          lastTpsUpdate === 0 ||
+          now - lastTpsUpdate >= TPS_UPDATE_INTERVAL_MS
+        ) {
           this.setTps(calculatedTps);
           lastTpsUpdate = now;
           callRenderApp();
@@ -332,15 +313,20 @@ export class BenchmarkRunner {
     }
   }
 
+  // Spinner drives periodic re-renders. Stopped only by teardown(), never self-terminates.
   private startSpinner(): void {
     this.stopSpinner();
     this.spinnerInterval = setInterval(() => {
-      if (this.isRunning && state.currentScreen === "fallback-chain") {
-        callRenderApp();
-      } else if (!this.isRunning) {
-        this.stopSpinner();
-      }
+      if (state.currentScreen === "fallback-chain") callRenderApp();
     }, SPINNER_INTERVAL_MS);
+    // Prevent spinner from blocking process exit
+    if (
+      this.spinnerInterval &&
+      typeof this.spinnerInterval === "object" &&
+      "unref" in this.spinnerInterval
+    ) {
+      (this.spinnerInterval as { unref(): void }).unref();
+    }
   }
 
   private stopSpinner(): void {

@@ -1,10 +1,17 @@
-import type { KeyStore } from "../types.js";
-import type { ImportResult } from "../storage.js";
-import { loadStore, getDefaultStore, saveStore } from "../storage.js";
-import { getActiveTheme } from "../themes.js";
-import { logDebug } from "../logger.js";
-import type { Screen } from "./types.js";
+import { watch, type FSWatcher } from "node:fs";
 import type { CliRenderer } from "@opentui/core";
+import { FILE_WATCHER_DEBOUNCE_MS } from "../constants.js";
+import { logDebug } from "../logger.js";
+import type { ImportResult } from "../storage.js";
+import {
+  getDefaultStore,
+  loadStore,
+  resolveStorePath,
+  saveStore,
+} from "../storage.js";
+import { getActiveTheme } from "../themes.js";
+import type { KeyStore } from "../types.js";
+import type { Screen } from "./types.js";
 
 export const state: {
   store: KeyStore;
@@ -68,6 +75,8 @@ export const state: {
 
 let navigateImpl: ((screen: Screen) => void) | null = null;
 let renderAppImpl: (() => void) | null = null;
+let fileWatcher: FSWatcher | null = null;
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function setNavigate(fn: (screen: Screen) => void): void {
   navigateImpl = fn;
@@ -85,17 +94,36 @@ export function callRenderApp(): void {
   if (renderAppImpl) renderAppImpl();
 }
 
+/**
+ * Reloads store from disk and reconciles transient benchmark state.
+ * Active runners are re-stamped; orphaned runners (model removed) are cancelled.
+ */
 export function refreshStore(): void {
-  logDebug(`[nim-rotator-tui] refreshStore: reloading from disk`);
   const fresh = loadStore();
-  if (fresh !== null) {
-    state.store = fresh;
-    logDebug(
-      `[nim-rotator-tui] refreshStore: loaded store with fallbackChain.length=${state.store.fallbackChain.length}`,
-    );
-  } else {
-    logDebug(`[nim-rotator-tui] refreshStore: loadStore returned null`);
+  if (fresh === null) return;
+
+  state.store = fresh;
+
+  // Reconcile benchmark runners with fresh store
+  for (const [id, runner] of state.benchmarkRunners) {
+    const model = state.store.fallbackChain.find((m) => m.id === id);
+    if (model) {
+      // Re-stamp transient "running" state
+      model.benchmarkStatus = "running";
+    } else {
+      // Model removed externally — cancel orphaned runner
+      runner.cancel();
+      state.benchmarkRunners.delete(id);
+    }
   }
+
+  // Clamp indices to new bounds
+  state.fallbackChainIndex = clampIndex(
+    state.fallbackChainIndex,
+    state.store.fallbackChain.length + 1,
+  );
+
+  callRenderApp();
 }
 
 export function setStatus(msg: string, color?: string): void {
@@ -105,16 +133,12 @@ export function setStatus(msg: string, color?: string): void {
 
 export function safeSaveStore(): boolean {
   try {
-    logDebug(
-      `[nim-rotator-tui] safeSaveStore: saving store with fallbackChain.length=${state.store.fallbackChain.length}`,
-    );
     saveStore(state.store);
-    logDebug(`[nim-rotator-tui] safeSaveStore: saved successfully`);
     return true;
   } catch (err) {
     console.error("[nim-rotator] Save failed:", err);
     setStatus(
-      "Save failed: " + (err instanceof Error ? err.message : "Unknown error"),
+      `Save failed: ${err instanceof Error ? err.message : "Unknown error"}`,
       getActiveTheme().error,
     );
     callRenderApp();
@@ -126,4 +150,45 @@ export function clampIndex(index: number, length: number): number {
   if (length <= 0) return 0;
   if (index < 0) return 0;
   return index >= length ? Math.max(0, length - 1) : index;
+}
+
+/** Resets stale "running" benchmark statuses from previous crashes. */
+export function sanitizeBenchmarkState(): void {
+  let changed = false;
+  for (const model of state.store.fallbackChain) {
+    if (model.benchmarkStatus === "running") {
+      model.benchmarkStatus = "idle";
+      changed = true;
+    }
+  }
+  if (changed) safeSaveStore();
+}
+
+/** Starts file watcher for external store changes (debounced). */
+export function startFileWatcher(): void {
+  stopFileWatcher();
+  const storePath = resolveStorePath();
+  try {
+    fileWatcher = watch(storePath, () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        refreshStore();
+      }, FILE_WATCHER_DEBOUNCE_MS);
+    });
+  } catch {
+    // File watcher unavailable — proceed without it
+    logDebug("file watcher unavailable");
+  }
+}
+
+/** Stops the file watcher. */
+export function stopFileWatcher(): void {
+  if (fileWatcher) {
+    fileWatcher.close();
+    fileWatcher = null;
+  }
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
 }

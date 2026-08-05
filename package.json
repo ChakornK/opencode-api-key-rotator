@@ -11,7 +11,7 @@
     "build": "bun run build.ts",
     "typecheck": "tsc --noEmit",
     "tui": "bun run bin/opencode-nim-rotator.ts",
-    "prepare": "npm run build",
+    "prepare": "node build.ts",
     "postinstall": "node scripts/postinstall.js",
     "uninstall": "node scripts/uninstall.js",
     "lint": "biome lint src/",

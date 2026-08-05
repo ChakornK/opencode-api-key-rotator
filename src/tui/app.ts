@@ -2,7 +2,16 @@ import { Box, Text } from "@opentui/core";
 import pkg from "../../package.json";
 import { getActiveKeys } from "../storage.js";
 import { getActiveTheme, setPreviewTheme } from "../themes.js";
-import { state, setNavigate, setRenderApp, callRenderApp } from "./state.js";
+import {
+  state,
+  setNavigate,
+  setRenderApp,
+  callRenderApp,
+  sanitizeBenchmarkState,
+  startFileWatcher,
+  stopFileWatcher,
+  safeSaveStore,
+} from "./state.js";
 import type { Screen } from "./types.js";
 import {
   buildMainMenu,
@@ -30,6 +39,12 @@ import {
 } from "./actions.js";
 
 export function initApp(): void {
+  // Startup sanitization: reset stale "running" benchmark states from previous crashes
+  sanitizeBenchmarkState();
+
+  // Start file watcher for external store changes
+  startFileWatcher();
+
   // Wire up navigation and render loop
   setNavigate((screen: Screen) => {
     state.currentScreen = screen;
@@ -108,6 +123,9 @@ export function initApp(): void {
       }
 
       if (key.ctrl && key.name === "c") {
+        cancelBenchmark();
+        safeSaveStore();
+        stopFileWatcher();
         if (state.renderer) state.renderer.destroy();
         process.exit(0);
       }

@@ -7,14 +7,8 @@ import {
   toggleKey,
   writeExportFile,
 } from "../storage.js";
-import { safeSaveStore } from "./state.js";
-import {
-  state,
-  navigate,
-  callRenderApp,
-  refreshStore,
-  setStatus,
-} from "./state.js";
+import { safeSaveStore, stopFileWatcher } from "./state.js";
+import { state, navigate, callRenderApp, setStatus } from "./state.js";
 import { BenchmarkRunner } from "./benchmark.js";
 
 export function handleKeyAction(action: string): void {
@@ -27,7 +21,6 @@ export function handleKeyAction(action: string): void {
       if (entry) {
         toggleKey(state.store, state.selectedKeyId);
         safeSaveStore();
-        refreshStore();
         setStatus(
           `Toggled "${entry.name}" to ${entry.enabled ? "ON" : "OFF"}`,
           theme.success,
@@ -61,7 +54,6 @@ export function handleMenuSelect(value: string): void {
     case "reset-failures":
       resetFailures(state.store);
       safeSaveStore();
-      refreshStore();
       setStatus("All failure counts reset", theme.success);
       navigate("list");
       break;
@@ -70,7 +62,6 @@ export function handleMenuSelect(value: string): void {
       state.store.rotationStrategy =
         current === "round-robin" ? "least-failures" : "round-robin";
       safeSaveStore();
-      refreshStore();
       setStatus(`Strategy: ${state.store.rotationStrategy}`, theme.primary);
       navigate("list");
       break;
@@ -86,6 +77,9 @@ export function handleMenuSelect(value: string): void {
       navigate("import-path");
       break;
     case "quit":
+      cancelBenchmark();
+      safeSaveStore();
+      stopFileWatcher();
       if (state.renderer) state.renderer.destroy();
       process.exit(0);
   }
@@ -109,7 +103,7 @@ export function handleExport(filePath: string): void {
     navigate("list");
   } catch (err) {
     console.error("[nim-rotator] Export failed:", err);
-    setStatus(`Export failed: check file path and permissions`, theme.error);
+    setStatus("Export failed: check file path and permissions", theme.error);
     callRenderApp();
   }
 }
@@ -127,7 +121,6 @@ export function handleImportConfirm(value: string): void {
     state.pendingImportResult.pendingKeys,
   );
   safeSaveStore();
-  refreshStore();
   const parts: string[] = [];
   if (added > 0) parts.push(`${added} added`);
   if (skipped > 0) parts.push(`${skipped} skipped`);
@@ -137,9 +130,7 @@ export function handleImportConfirm(value: string): void {
   navigate("list");
 }
 
-// ---------------------------------------------------------------------------
 // Fallback Chain Actions
-// ---------------------------------------------------------------------------
 
 export function handleFallbackMenuSelect(value: string): void {
   switch (value) {
@@ -171,13 +162,11 @@ export function handleFallbackChainKey(keyName: string): void {
       callRenderApp();
       break;
     case "x": {
-      // Remove item
       if (state.fallbackChainIndex < chain.length) {
         const removed = chain[state.fallbackChainIndex];
         cancelBenchmark(removed.id);
         chain.splice(state.fallbackChainIndex, 1);
         safeSaveStore();
-        refreshStore();
         if (state.fallbackChainIndex >= chain.length) {
           state.fallbackChainIndex = Math.max(0, chain.length - 1);
         }
@@ -186,7 +175,6 @@ export function handleFallbackChainKey(keyName: string): void {
       break;
     }
     case "j": {
-      // Move item down
       const jIndex = state.fallbackChainIndex;
       if (jIndex < chain.length - 1) {
         const temp = chain[jIndex];
@@ -194,13 +182,11 @@ export function handleFallbackChainKey(keyName: string): void {
         chain[jIndex + 1] = temp;
         state.fallbackChainIndex = jIndex + 1;
         safeSaveStore();
-        refreshStore();
         callRenderApp();
       }
       break;
     }
     case "k": {
-      // Move item up
       const kIndex = state.fallbackChainIndex;
       if (kIndex > 0 && kIndex < chain.length) {
         const temp = chain[kIndex];
@@ -208,33 +194,30 @@ export function handleFallbackChainKey(keyName: string): void {
         chain[kIndex - 1] = temp;
         state.fallbackChainIndex = kIndex - 1;
         safeSaveStore();
-        refreshStore();
         callRenderApp();
       }
       break;
     }
     case "a": {
-      // Add new model below current item
       state.modelSelectorIndex = 0;
       state.modelSelectorScrollOffset = 0;
       navigate("model-selector");
       break;
     }
     case "b": {
-      startBenchmark();
+      startBenchmark().catch(() => {
+        // Error already handled inside startBenchmark
+      });
       break;
     }
     case "c": {
       const selectedModel = chain[state.fallbackChainIndex];
-      if (selectedModel) {
-        cancelBenchmark(selectedModel.id);
-      }
+      if (selectedModel) cancelBenchmark(selectedModel.id);
       break;
     }
     case "return":
     case "enter": {
       if (state.fallbackChainIndex >= chain.length) {
-        // "Add model" selected
         state.modelSelectorIndex = 0;
         state.modelSelectorScrollOffset = 0;
         navigate("model-selector");
@@ -251,6 +234,7 @@ export async function fetchNimModels(): Promise<void> {
     });
     if (!res.ok) {
       setStatus("Failed to fetch models from NVIDIA NIM", "#FF5555");
+      state.modelsLoaded = false;
       return;
     }
     const data = (await res.json()) as {
@@ -258,28 +242,27 @@ export async function fetchNimModels(): Promise<void> {
     };
     if (!data.data || !Array.isArray(data.data)) {
       setStatus("Invalid response from NVIDIA NIM", "#FF5555");
+      state.modelsLoaded = false;
       return;
     }
     state.availableModels = data.data.map((m) => ({
       id: m.id,
       name: m.name ?? m.id,
     }));
+    state.modelsLoaded = true;
   } catch (err) {
     console.error("[nim-rotator] Failed to fetch models:", err);
     setStatus("Failed to fetch models from NVIDIA NIM", "#FF5555");
+    state.modelsLoaded = false;
   }
 }
 
 export function addFallbackModel(id: string, name: string): void {
   const chain = state.store.fallbackChain;
-  logDebug(
-    `[nim-rotator-tui] addFallbackModel called: id=${id}, name=${name}, currentChainLength=${chain.length}`,
-  );
 
-  // Prevent duplicates (by id, not name, since upstream may have duplicate display names)
   if (chain.some((m) => m.id === id)) {
     setStatus(
-      `Model "${name}" (${id}) is already in the fallback chain`,
+      `Model "${name}" is already in the fallback chain`,
       getActiveTheme().warning,
     );
     callRenderApp();
@@ -292,29 +275,20 @@ export function addFallbackModel(id: string, name: string): void {
       : state.fallbackChainIndex + 1;
 
   chain.splice(insertIndex, 0, {
-    id, // Use the actual model API ID
+    id,
     name,
     benchmarkTtfb: undefined,
     benchmarkTps: undefined,
     benchmarkStatus: "idle",
   });
 
-  logDebug(
-    `[nim-rotator-tui] addFallbackModel: added model, newChainLength=${chain.length}`,
-  );
-
   safeSaveStore();
-  refreshStore();
   state.fallbackChainIndex = insertIndex;
-  logDebug(
-    `[nim-rotator-tui] addFallbackModel: done, finalChainLength=${state.store.fallbackChain.length}`,
-  );
 }
 
-// ---------------------------------------------------------------------------
 // Benchmarking
-// ---------------------------------------------------------------------------
 
+/** Starts a benchmark for the currently selected model. Guards against double-start. */
 export async function startBenchmark(): Promise<void> {
   const chain = state.store.fallbackChain;
   const idx = state.fallbackChainIndex;
@@ -324,52 +298,61 @@ export async function startBenchmark(): Promise<void> {
     return;
   }
 
-  const model = chain[idx];
+  const modelId = chain[idx].id;
+
+  // Double-start guard
+  if (state.benchmarkRunners.has(modelId)) return;
+
   const apiKey =
     state.store.keys.find((k) => k.enabled && k.key)?.key ||
     process.env.NVIDIA_API_KEY;
-
   if (!apiKey) {
     setStatus("No API key available for benchmarking", getActiveTheme().error);
     return;
   }
 
-  // If this model already has a running benchmark, cancel and restart it
-  const existing = state.benchmarkRunners.get(model.id);
-  if (existing) {
-    existing.cancel();
-    state.benchmarkRunners.delete(model.id);
-  }
-
-  // Reset selected model to idle for fresh benchmark
-  model.benchmarkStatus = "idle";
+  // Set running state
+  const model = chain[idx];
+  model.benchmarkStatus = "running";
   delete model.benchmarkTps;
   delete model.benchmarkTtfb;
   delete model.benchmarkError;
 
   const runner = new BenchmarkRunner();
-  state.benchmarkRunners.set(model.id, runner);
-  model.benchmarkStatus = "running";
+  state.benchmarkRunners.set(modelId, runner);
   callRenderApp();
 
-  await runner.run(model, apiKey);
-
-  if (state.benchmarkRunners.get(model.id) === runner) {
-    state.benchmarkRunners.delete(model.id);
-    runner.applyResultToModel(model);
-    safeSaveStore();
-    callRenderApp();
+  try {
+    await runner.run(model, apiKey);
+  } catch (err) {
+    // Runner failed unexpectedly
+    logDebug(
+      `benchmark runner threw: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+
+  // Re-resolve model from CURRENT store (may have been refreshed during await)
+  const currentModel = state.store.fallbackChain.find((m) => m.id === modelId);
+  if (currentModel && state.benchmarkRunners.get(modelId) === runner) {
+    state.benchmarkRunners.delete(modelId);
+    runner.applyResultToModel(currentModel);
+    safeSaveStore();
+  } else if (state.benchmarkRunners.get(modelId) === runner) {
+    // Model removed during benchmark — clean up runner
+    state.benchmarkRunners.delete(modelId);
+  }
+  callRenderApp();
 }
 
+/** Cancels one or all benchmark runners. Resets model statuses. */
 export function cancelBenchmark(modelId?: string): void {
   if (modelId) {
     const runner = state.benchmarkRunners.get(modelId);
     if (runner) {
       runner.cancel();
-      state.benchmarkRunners.delete(modelId);
+      // cancel() already evicts from map
       const model = state.store.fallbackChain.find((m) => m.id === modelId);
-      if (model && model.benchmarkStatus === "running") {
+      if (model) {
         model.benchmarkStatus = "idle";
         delete model.benchmarkTps;
         delete model.benchmarkTtfb;
@@ -379,10 +362,11 @@ export function cancelBenchmark(modelId?: string): void {
       callRenderApp();
     }
   } else {
+    // Cancel all
     for (const [id, runner] of state.benchmarkRunners) {
       runner.cancel();
       const model = state.store.fallbackChain.find((m) => m.id === id);
-      if (model && model.benchmarkStatus === "running") {
+      if (model) {
         model.benchmarkStatus = "idle";
         delete model.benchmarkTps;
         delete model.benchmarkTtfb;

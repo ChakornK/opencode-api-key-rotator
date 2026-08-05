@@ -10,7 +10,6 @@ import {
   DEDUP_WINDOW_MS,
   SERVER_ERROR_THRESHOLD,
   NETWORK_ERROR_THRESHOLD,
-  WAIT_FOR_IDLE_TIMEOUT_MS,
 } from "./constants.js";
 import {
   isModelAvailable,

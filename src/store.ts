@@ -11,7 +11,6 @@ import { homedir } from "os";
 import type {
   ApiKeyEntry,
   ExportPayload,
-  ExportedKey,
   FallbackModel,
   ImportResult,
   KeyStore,
@@ -89,11 +88,12 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
             k !== null && typeof k === "object",
         )
         .map((k) => ({
-          id: k.id as string,
-          name: k.name as string,
-          key: k.key as string,
-          createdAt: k.createdAt as number,
-          lastUsedAt: k.lastUsedAt as number | undefined,
+          id: typeof k.id === "string" ? k.id : crypto.randomUUID(),
+          name: typeof k.name === "string" ? k.name : "unnamed",
+          key: typeof k.key === "string" ? k.key : "",
+          createdAt: typeof k.createdAt === "number" ? k.createdAt : Date.now(),
+          lastUsedAt:
+            typeof k.lastUsedAt === "number" ? k.lastUsedAt : undefined,
           rateLimitCount:
             typeof k.rateLimitCount === "number" ? k.rateLimitCount : 0,
           enabled: k.enabled !== false,
@@ -101,7 +101,8 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
             k.modelBlacklist && typeof k.modelBlacklist === "object"
               ? (k.modelBlacklist as Record<string, ModelBlacklistEntry>)
               : undefined,
-        })) as ApiKeyEntry[],
+        }))
+        .filter((k) => k.key) as ApiKeyEntry[],
       fallbackChain: Array.isArray(data.fallbackChain)
         ? (data.fallbackChain as unknown[]).filter(
             (m): m is FallbackModel =>

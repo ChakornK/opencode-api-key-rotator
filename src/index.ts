@@ -9,7 +9,7 @@ import {
   addKey,
 } from "./store.js";
 import { SessionManager } from "./session.js";
-import { handleError, resolveModel, classifyError } from "./error-handler.js";
+import { handleError, resolveModel } from "./error-handler.js";
 import { startProxy } from "./proxy.js";
 import { PROVIDER_ID, NIM_BASE_URL } from "./constants.js";
 import { logDebug } from "./logger.js";

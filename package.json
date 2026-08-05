@@ -3,13 +3,13 @@
   "version": "0.2.0",
   "description": "An OpenCode plugin for managing and rotating multiple NVIDIA NIM API keys",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "type": "module",
   "bin": {
     "opencode-nim-rotator": "./bin/opencode-nim-rotator.ts"
   },
   "scripts": {
-    "build": "bun run build.ts",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc",
     "tui": "bun run bin/opencode-nim-rotator.ts",
     "prepare": "node build.ts",
     "postinstall": "node scripts/postinstall.js",
@@ -48,7 +48,6 @@
     "@biomejs/biome": "^2.5.7",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@types/bun": "^1.3.14",
-    "esbuild": "^0.28.1",
     "prettier": "^3.9.6",
     "typescript": "7.0.2"
   },

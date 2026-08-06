@@ -197,7 +197,11 @@ export async function handleError(
   const errorClass = classifyError(event.error);
 
   if (errorClass === "non_retryable") {
-    session.rateLimitCount = 0;
+    // SessionStatus lacks statusCode, so 429 retries classify as non_retryable;
+    // skip the reset to let the proxy-side counter accumulate
+    if (event.source !== "session.status.retry") {
+      session.rateLimitCount = 0;
+    }
     return;
   }
   if (errorClass === "auth") return; // Proxy handles key disabling

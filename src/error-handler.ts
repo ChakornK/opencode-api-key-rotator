@@ -175,11 +175,24 @@ export async function handleError(
     waitForIdle,
     promptSession,
   } = deps;
+
+  logDebug(
+    `[handleError] ENTRY source=${event.source} sessionID=${event.sessionID} error=${JSON.stringify(event.error, null, 0)?.slice(0, 300)}`,
+  );
+
   const session = sessionManager.getIfExists(event.sessionID);
-  if (!session?.currentModelId) return;
+  if (!session?.currentModelId) {
+    logDebug(
+      `[handleError] EXIT early: session=${!!session} currentModelId=${session?.currentModelId ?? "undefined"}`,
+    );
+    return;
+  }
 
   // Phase guard
-  if (session.phase === "retrying") return;
+  if (session.phase === "retrying") {
+    logDebug(`[handleError] EXIT early: phase=retrying`);
+    return;
+  }
 
   // Fingerprint dedup
   const now = Date.now();
@@ -188,6 +201,9 @@ export async function handleError(
     fingerprint === session.lastErrorFingerprint &&
     now - session.lastErrorAt < DEDUP_WINDOW_MS
   ) {
+    logDebug(
+      `[handleError] EXIT dedup: fingerprint=${fingerprint} elapsed=${now - session.lastErrorAt}ms`,
+    );
     return;
   }
   session.lastErrorFingerprint = fingerprint;
@@ -195,22 +211,38 @@ export async function handleError(
 
   // Classify
   const errorClass = classifyError(event.error);
+  logDebug(
+    `[handleError] classified=${errorClass} rateLimitCount=${session.rateLimitCount} serverErrorCount=${session.serverErrorCount} phase=${session.phase} chainIndex=${session.chainIndex} maxRateLimitFailures=${store.maxRateLimitFailures}`,
+  );
 
   if (errorClass === "non_retryable") {
     // SessionStatus lacks statusCode, so 429 retries classify as non_retryable;
     // skip the reset to let the proxy-side counter accumulate
     if (event.source !== "session.status.retry") {
+      logDebug(
+        `[handleError] non_retryable from ${event.source}: resetting rateLimitCount`,
+      );
       session.rateLimitCount = 0;
+    } else {
+      logDebug(
+        `[handleError] non_retryable from session.status.retry: preserving rateLimitCount=${session.rateLimitCount}`,
+      );
     }
     return;
   }
-  if (errorClass === "auth") return; // Proxy handles key disabling
+  if (errorClass === "auth") {
+    logDebug(`[handleError] EXIT: auth error, proxy handles key disabling`);
+    return;
+  }
 
   // Determine if fallback should trigger
   let shouldFallback = false;
   if (errorClass === "rate_limit") {
     session.rateLimitCount++;
     shouldFallback = session.rateLimitCount >= store.maxRateLimitFailures;
+    logDebug(
+      `[handleError] rate_limit: rateLimitCount=${session.rateLimitCount} threshold=${store.maxRateLimitFailures} shouldFallback=${shouldFallback}`,
+    );
   } else if (errorClass === "server_error" || errorClass === "timeout") {
     session.serverErrorCount++;
     shouldFallback = session.serverErrorCount >= SERVER_ERROR_THRESHOLD;
@@ -221,12 +253,25 @@ export async function handleError(
     shouldFallback = session.serverErrorCount >= NETWORK_ERROR_THRESHOLD;
   }
 
-  if (!shouldFallback) return;
+  if (!shouldFallback) {
+    logDebug(`[handleError] EXIT: shouldFallback=false`);
+    return;
+  }
+
+  logDebug(
+    `[handleError] FALLBACK TRIGGERED class=${errorClass} rateLimitCount=${session.rateLimitCount} chainLength=${store.fallbackChain.length}`,
+  );
 
   // Circuit breaker
   const chain = store.fallbackChain;
-  if (chain.length < 2) return;
+  if (chain.length < 2) {
+    logDebug(`[handleError] EXIT: chain.length=${chain.length} < 2`);
+    return;
+  }
   if (session.fallbacksTriggered >= chain.length) {
+    logDebug(
+      `[handleError] EXIT: all models exhausted (fallbacksTriggered=${session.fallbacksTriggered} >= chain.length=${chain.length})`,
+    );
     showToast("error", "All models exhausted. Try again later.");
     sessionManager.setPhase(event.sessionID, "idle");
     return;
@@ -242,7 +287,14 @@ export async function handleError(
   }
 
   const targetModel = chain[nextIndex];
-  if (!targetModel) return;
+  if (!targetModel) {
+    logDebug(`[handleError] EXIT: no targetModel at index ${nextIndex}`);
+    return;
+  }
+
+  logDebug(
+    `[handleError] advancing: currentModel=${session.currentModelId} -> targetModel=${targetModel.id} (index ${nextIndex}) isSubagent=${session.isSubagent}`,
+  );
 
   // Subagent path: advance without abort
   if (session.isSubagent) {
@@ -251,17 +303,27 @@ export async function handleError(
     session.rateLimitCount = 0;
     session.serverErrorCount = 0;
     showToast("info", `Next turn: ${targetModel.name}`);
+    logDebug(`[handleError] subagent fallback done`);
     return;
   }
 
   // Main session: toast → abort → wait idle → re-prompt
-  if (!sessionManager.setPhase(event.sessionID, "retrying")) return;
+  const phaseSet = sessionManager.setPhase(event.sessionID, "retrying");
+  if (!phaseSet) {
+    logDebug(
+      `[handleError] EXIT: setPhase(retrying) failed from phase=${session.phase}`,
+    );
+    return;
+  }
   showToast("info", `Switching to ${targetModel.name}`);
 
   try {
+    logDebug(`[handleError] aborting session ${event.sessionID}`);
     await abortSession(event.sessionID);
+    logDebug(`[handleError] waiting for idle`);
     const idle = await waitForIdle(event.sessionID);
     if (!idle) throw new Error("waitForIdle timed out");
+    logDebug(`[handleError] prompting with model ${targetModel.id}`);
     await promptSession(event.sessionID, targetModel.id, session);
 
     // Success
@@ -271,9 +333,10 @@ export async function handleError(
     session.serverErrorCount = 0;
     resetPromotionFailures(targetModel.id);
     sessionManager.setPhase(event.sessionID, "active");
+    logDebug(`[handleError] fallback SUCCESS, now using ${targetModel.id}`);
   } catch (err) {
     logDebug(
-      `triggerFallback failed for ${event.sessionID}: ${err instanceof Error ? err.message : String(err)}`,
+      `[handleError] fallback FAILED for ${event.sessionID}: ${err instanceof Error ? err.message : String(err)}`,
     );
     sessionManager.setPhase(event.sessionID, "active");
     session.rateLimitCount = 0;

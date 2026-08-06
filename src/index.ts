@@ -67,14 +67,44 @@ export const NvidiaNimKeyRotator: Plugin = async (
       config,
       sessions,
       onRateLimit: (sessionID, modelId, keyId) => {
+        logDebug(
+          `[onRateLimit] called sessionID=${sessionID} modelId=${modelId} keyId=${keyId}`,
+        );
         const session = sessionManager.getIfExists(sessionID);
-        if (session) session.rateLimitCount++;
-        recordRateLimit(store, keyId);
-        recordModelRateLimit(store, keyId, modelId);
+        if (session) {
+          const prev = session.rateLimitCount;
+          session.rateLimitCount++;
+          logDebug(
+            `[onRateLimit] session found, rateLimitCount ${prev} -> ${session.rateLimitCount} phase=${session.phase} currentModelId=${session.currentModelId}`,
+          );
+        } else {
+          logDebug(
+            `[onRateLimit] session NOT found in sessionManager for ${sessionID} (count not incremented)`,
+          );
+        }
+        try {
+          recordRateLimit(store, keyId);
+          logDebug(`[onRateLimit] recordRateLimit done for keyId=${keyId}`);
+        } catch (e) {
+          logDebug(
+            `[onRateLimit] recordRateLimit failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+        try {
+          recordModelRateLimit(store, keyId, modelId);
+          logDebug(`[onRateLimit] recordModelRateLimit done`);
+        } catch (e) {
+          logDebug(
+            `[onRateLimit] recordModelRateLimit failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
         try {
           saveStore(store, config);
-        } catch {
-          /* best-effort */
+          logDebug(`[onRateLimit] saveStore done`);
+        } catch (e) {
+          logDebug(
+            `[onRateLimit] saveStore failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
       },
     });
@@ -255,6 +285,10 @@ export const NvidiaNimKeyRotator: Plugin = async (
       session.chainIndex = desiredIndex;
       session.lastUserMessageID = output.message.id;
 
+      logDebug(
+        `[chat.message] sessionID=${sessionID} model=${target.id} chainIndex=${desiredIndex} phase=${session.phase} rateLimitCount=${session.rateLimitCount}`,
+      );
+
       // Update shared sessions map for proxy model rewriting
       sessions.set(sessionID, session);
     },
@@ -273,6 +307,9 @@ export const NvidiaNimKeyRotator: Plugin = async (
           | Record<string, unknown>
           | undefined;
         const sessionID = props?.sessionID as string | undefined;
+        logDebug(
+          `[event] session.error sessionID=${sessionID} error=${JSON.stringify(props?.error, null, 0)?.slice(0, 300)}`,
+        );
         if (!sessionID) return;
         await handleError(
           { sessionID, error: props?.error, source: "session.error" },
@@ -293,6 +330,9 @@ export const NvidiaNimKeyRotator: Plugin = async (
           | Record<string, unknown>
           | undefined;
         const sessionID = props?.sessionID as string | undefined;
+        logDebug(
+          `[event] session.next.step.failed sessionID=${sessionID} error=${JSON.stringify(props?.error, null, 0)?.slice(0, 300)}`,
+        );
         if (!sessionID) return;
         await handleError(
           {
@@ -320,6 +360,9 @@ export const NvidiaNimKeyRotator: Plugin = async (
         const status = props?.status as Record<string, unknown> | undefined;
 
         if (status?.type === "retry" && sessionID) {
+          logDebug(
+            `[event] session.status.retry sessionID=${sessionID} attempt=${status.attempt} message=${status.message} hasError=${!!props?.error} status=${JSON.stringify(status, null, 0)?.slice(0, 200)}`,
+          );
           await handleError(
             {
               sessionID,
@@ -340,7 +383,10 @@ export const NvidiaNimKeyRotator: Plugin = async (
 
         if (status?.type === "idle" && sessionID) {
           const session = sessionManager.getIfExists(sessionID);
-          if (!session) return; // Ignore unknown sessions — no allocation
+          logDebug(
+            `[event] session.status.idle sessionID=${sessionID} hasSession=${!!session} phase=${session?.phase} rateLimitCount=${session?.rateLimitCount}`,
+          );
+          if (!session) return;
           if (session.phase === "retrying") return;
           session.rateLimitCount = 0;
           session.serverErrorCount = 0;

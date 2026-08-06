@@ -129,8 +129,22 @@ export function startProxy(options: ProxyOptions): ProxyServer | null {
 
             // 429: notify caller so it can count and blacklist the key
             if (response.status === 429) {
+              logDebug(
+                `[proxy] 429 received sessionID=${sessionID ?? "none"} model=${targetModel ?? "none"} keyId=${next.key.id} hasCallback=${!!onRateLimit}`,
+              );
               if (sessionID && targetModel && onRateLimit) {
-                onRateLimit(sessionID, targetModel, next.key.id);
+                try {
+                  onRateLimit(sessionID, targetModel, next.key.id);
+                  logDebug(`[proxy] onRateLimit callback completed`);
+                } catch (cbErr) {
+                  logDebug(
+                    `[proxy] onRateLimit callback threw: ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`,
+                  );
+                }
+              } else {
+                logDebug(
+                  `[proxy] 429 NOT invoking onRateLimit: sessionID=${!!sessionID} targetModel=${!!targetModel} onRateLimit=${!!onRateLimit}`,
+                );
               }
               return response;
             }

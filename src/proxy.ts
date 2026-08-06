@@ -13,6 +13,7 @@ export interface ProxyOptions {
   config?: KeyStoreConfig;
   sessions: Map<string, SessionState>;
   targetUrl?: string;
+  onRateLimit?: (sessionID: string, modelId: string, keyId: string) => void;
 }
 
 export interface ProxyServer {
@@ -24,7 +25,7 @@ const DEFAULT_TARGET_URL = "https://integrate.api.nvidia.com/v1";
 
 /** Starts the local proxy server. Retries up to PORT_RETRY_ATTEMPTS on EADDRINUSE. */
 export function startProxy(options: ProxyOptions): ProxyServer | null {
-  const { store, sessions, config } = options;
+  const { store, sessions, config, onRateLimit } = options;
   const targetBaseUrl = options.targetUrl ?? DEFAULT_TARGET_URL;
   let boundPort = 0;
   let server: ReturnType<typeof Bun.serve> | null = null;
@@ -126,8 +127,11 @@ export function startProxy(options: ProxyOptions): ProxyServer | null {
               return response;
             }
 
-            // 429: pass through unmodified — no counting, no callbacks
+            // 429: notify caller so it can count and blacklist the key
             if (response.status === 429) {
+              if (sessionID && targetModel && onRateLimit) {
+                onRateLimit(sessionID, targetModel, next.key.id);
+              }
               return response;
             }
 

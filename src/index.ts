@@ -10,6 +10,8 @@ import {
   getDefaultStore,
   getNextKey,
   loadStore,
+  recordModelRateLimit,
+  recordRateLimit,
   saveStore,
 } from "./store.js";
 import type { KeyStoreConfig, SessionState } from "./types.js";
@@ -59,7 +61,23 @@ export const NvidiaNimKeyRotator: Plugin = async (
   let proxy: ReturnType<typeof startProxy> = null;
 
   if (!disableProxy) {
-    proxy = startProxy({ port: proxyPort, store, config, sessions });
+    proxy = startProxy({
+      port: proxyPort,
+      store,
+      config,
+      sessions,
+      onRateLimit: (sessionID, modelId, keyId) => {
+        const session = sessionManager.getIfExists(sessionID);
+        if (session) session.rateLimitCount++;
+        recordRateLimit(store, keyId);
+        recordModelRateLimit(store, keyId, modelId);
+        try {
+          saveStore(store, config);
+        } catch {
+          /* best-effort */
+        }
+      },
+    });
     if (!proxy) {
       logDebug("proxy disabled due to port conflict");
     }

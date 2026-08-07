@@ -144,9 +144,10 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
     let toWrite: KeyStore;
 
     if (disk) {
-      // Merge: disk wins structure, runtime wins volatile
+      // Merge: disk wins key list structure, runtime wins fallback chain and volatile state
       toWrite = {
         ...disk,
+        fallbackChain: store.fallbackChain,
         lastUsedKeyId: store.lastUsedKeyId,
         updatedAt: Date.now(),
       };
@@ -157,18 +158,6 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
           diskKey.rateLimitCount = memKey.rateLimitCount;
           diskKey.lastUsedAt = memKey.lastUsedAt;
           diskKey.modelBlacklist = memKey.modelBlacklist;
-        }
-      }
-      // Merge per-model benchmark state from memory
-      for (const memModel of store.fallbackChain) {
-        const diskModel = toWrite.fallbackChain.find(
-          (m) => m.id === memModel.id,
-        );
-        if (diskModel) {
-          diskModel.benchmarkStatus = memModel.benchmarkStatus;
-          diskModel.benchmarkTtfb = memModel.benchmarkTtfb;
-          diskModel.benchmarkTps = memModel.benchmarkTps;
-          diskModel.benchmarkError = memModel.benchmarkError;
         }
       }
       // Validate lastUsedKeyId

@@ -153,13 +153,6 @@ export interface ErrorHandlerDeps {
   store: KeyStore;
   sessionManager: SessionManager;
   showToast: (variant: "info" | "warning" | "error", message: string) => void;
-  abortSession: (sessionID: string) => Promise<void>;
-  waitForIdle: (sessionID: string) => Promise<boolean>;
-  promptSession: (
-    sessionID: string,
-    modelId: string,
-    session: SessionState,
-  ) => Promise<void>;
 }
 
 /** Handles a single error event. Classifies, deduplicates, and triggers fallback if needed. */
@@ -167,14 +160,7 @@ export async function handleError(
   event: ErrorEvent,
   deps: ErrorHandlerDeps,
 ): Promise<void> {
-  const {
-    store,
-    sessionManager,
-    showToast,
-    abortSession,
-    waitForIdle,
-    promptSession,
-  } = deps;
+  const { store, sessionManager, showToast } = deps;
 
   logDebug(
     `[handleError] ENTRY source=${event.source} sessionID=${event.sessionID} error=${JSON.stringify(event.error, null, 0)?.slice(0, 300)}`,
@@ -307,38 +293,17 @@ export async function handleError(
     return;
   }
 
-  // Main session: toast → abort → wait idle → re-prompt
-  const phaseSet = sessionManager.setPhase(event.sessionID, "retrying");
-  if (!phaseSet) {
-    logDebug(
-      `[handleError] EXIT: setPhase(retrying) failed from phase=${session.phase}`,
-    );
-    return;
-  }
+  // Main session: update state and let OpenCode's retry pick up the new model
+  // via the proxy's model rewrite. No abort/re-prompt needed — avoids message
+  // duplication and the stale-chainIndex race where chat.message hook would
+  // rewrite the model back to the failing one.
+  session.chainIndex = nextIndex;
+  session.currentModelId = targetModel.id;
+  session.rateLimitCount = 0;
+  session.serverErrorCount = 0;
+  resetPromotionFailures(targetModel.id);
   showToast("info", `Switching to ${targetModel.name}`);
-
-  try {
-    logDebug(`[handleError] aborting session ${event.sessionID}`);
-    await abortSession(event.sessionID);
-    logDebug(`[handleError] waiting for idle`);
-    const idle = await waitForIdle(event.sessionID);
-    if (!idle) throw new Error("waitForIdle timed out");
-    logDebug(`[handleError] prompting with model ${targetModel.id}`);
-    await promptSession(event.sessionID, targetModel.id, session);
-
-    // Success
-    session.chainIndex = nextIndex;
-    session.currentModelId = targetModel.id;
-    session.rateLimitCount = 0;
-    session.serverErrorCount = 0;
-    resetPromotionFailures(targetModel.id);
-    sessionManager.setPhase(event.sessionID, "active");
-    logDebug(`[handleError] fallback SUCCESS, now using ${targetModel.id}`);
-  } catch (err) {
-    logDebug(
-      `[handleError] fallback FAILED for ${event.sessionID}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    sessionManager.setPhase(event.sessionID, "active");
-    session.rateLimitCount = 0;
-  }
+  logDebug(
+    `[handleError] fallback done: now using ${targetModel.id} (index ${nextIndex}), awaiting retry`,
+  );
 }

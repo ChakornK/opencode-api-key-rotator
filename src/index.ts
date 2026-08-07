@@ -72,15 +72,20 @@ export const NvidiaNimKeyRotator: Plugin = async (
         );
         const session = sessionManager.getIfExists(sessionID);
         if (session) {
-          const prev = session.rateLimitCount;
-          session.rateLimitCount++;
-          logDebug(
-            `[onRateLimit] session found, rateLimitCount ${prev} -> ${session.rateLimitCount} phase=${session.phase} currentModelId=${session.currentModelId}`,
-          );
+          // Skip counter increment if model already changed (stale 429 from prior model)
+          if (session.currentModelId === modelId) {
+            const prev = session.rateLimitCount;
+            session.rateLimitCount++;
+            logDebug(
+              `[onRateLimit] rateLimitCount ${prev} -> ${session.rateLimitCount} phase=${session.phase}`,
+            );
+          } else {
+            logDebug(
+              `[onRateLimit] stale 429 for ${modelId}, session now uses ${session.currentModelId} — skipping count`,
+            );
+          }
         } else {
-          logDebug(
-            `[onRateLimit] session NOT found in sessionManager for ${sessionID} (count not incremented)`,
-          );
+          logDebug(`[onRateLimit] session NOT found for ${sessionID}`);
         }
         try {
           recordRateLimit(store, keyId);
@@ -135,86 +140,6 @@ export const NvidiaNimKeyRotator: Plugin = async (
     } catch {
       return false;
     }
-  }
-
-  // Helper: abort session
-  async function abortSession(sessionID: string): Promise<void> {
-    await client.session.abort({ path: { id: sessionID } });
-  }
-
-  // Helper: wait for idle (event-driven via polling fallback)
-  async function waitForIdle(sessionID: string): Promise<boolean> {
-    const start = Date.now();
-    while (Date.now() - start < 5000) {
-      try {
-        const res = await client.session.status({});
-        const data =
-          res && typeof res === "object" && "data" in res ? res.data : res;
-        if (data && typeof data === "object") {
-          const statusMap = data as Record<string, unknown>;
-          const status = statusMap[sessionID] as
-            | Record<string, unknown>
-            | undefined;
-          if (!status || status.type === "idle") return true;
-        }
-      } catch {
-        /* keep polling */
-      }
-      await new Promise<void>((r) => setTimeout(r, 100));
-    }
-    return false;
-  }
-
-  // Helper: re-prompt session with a new model
-  async function promptSession(
-    sessionID: string,
-    modelId: string,
-    _session: SessionState,
-  ): Promise<void> {
-    const messagesResult = await client.session.messages({
-      path: { id: sessionID },
-    });
-    const entries =
-      messagesResult && "data" in messagesResult
-        ? messagesResult.data
-        : messagesResult;
-    if (!Array.isArray(entries)) throw new Error("no messages");
-
-    const userMessages = (entries as Array<Record<string, unknown>>).filter(
-      (e) => (e?.info as Record<string, unknown>)?.role === "user",
-    );
-    if (userMessages.length === 0) throw new Error("no user messages");
-
-    const lastUser = userMessages[userMessages.length - 1] as Record<
-      string,
-      unknown
-    >;
-    const info = lastUser.info as Record<string, unknown>;
-    const parts = lastUser.parts as Array<Record<string, unknown>>;
-
-    const promptParts: Array<{ type: "text"; id: string; text: string }> = [];
-    if (Array.isArray(parts)) {
-      for (const part of parts) {
-        if (part?.type === "text") {
-          promptParts.push({
-            type: "text",
-            id: part.id as string,
-            text: part.text as string,
-          });
-        }
-      }
-    }
-    if (promptParts.length === 0) throw new Error("no text parts");
-
-    await client.session.prompt({
-      path: { id: sessionID },
-      body: {
-        messageID: info?.id as string,
-        agent: info?.agent as string,
-        model: { providerID: PROVIDER_ID, modelID: modelId },
-        parts: promptParts,
-      },
-    });
   }
 
   const hooks: Hooks = {
@@ -313,14 +238,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
         if (!sessionID) return;
         await handleError(
           { sessionID, error: props?.error, source: "session.error" },
-          {
-            store,
-            sessionManager,
-            showToast,
-            abortSession,
-            waitForIdle,
-            promptSession,
-          },
+          { store, sessionManager, showToast },
         );
         return;
       }
@@ -340,14 +258,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
             error: props?.error,
             source: "session.next.step.failed",
           },
-          {
-            store,
-            sessionManager,
-            showToast,
-            abortSession,
-            waitForIdle,
-            promptSession,
-          },
+          { store, sessionManager, showToast },
         );
         return;
       }
@@ -382,14 +293,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
               error,
               source: "session.status.retry",
             },
-            {
-              store,
-              sessionManager,
-              showToast,
-              abortSession,
-              waitForIdle,
-              promptSession,
-            },
+            { store, sessionManager, showToast },
           );
           return;
         }

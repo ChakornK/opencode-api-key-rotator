@@ -147,7 +147,7 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
       // Merge: disk wins key list structure, runtime wins fallback chain and volatile state
       toWrite = {
         ...disk,
-        fallbackChain: store.fallbackChain,
+        fallbackChain: store.fallbackChain.map((m) => ({ ...m })),
         lastUsedKeyId: store.lastUsedKeyId,
         updatedAt: Date.now(),
       };
@@ -168,7 +168,11 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
         toWrite.lastUsedKeyId = undefined;
       }
     } else {
-      toWrite = { ...store, updatedAt: Date.now() };
+      toWrite = {
+        ...store,
+        fallbackChain: store.fallbackChain.map((m) => ({ ...m })),
+        updatedAt: Date.now(),
+      };
     }
 
     // Sanitize transient benchmark state

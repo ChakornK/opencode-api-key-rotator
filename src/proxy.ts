@@ -99,10 +99,12 @@ export function startProxy(options: ProxyOptions): ProxyServer | null {
 
             // Forward with connect timeout
             const controller = new AbortController();
-            const connectTimer = setTimeout(
-              () => controller.abort(),
-              CONNECT_TIMEOUT_MS,
-            );
+            const connectTimer = setTimeout(() => {
+              logDebug(
+                `[proxy] CONNECT_TIMEOUT fired after ${CONNECT_TIMEOUT_MS}ms sessionID=${sessionID ?? "none"} model=${targetModel ?? "none"}`,
+              );
+              controller.abort();
+            }, CONNECT_TIMEOUT_MS);
 
             let response: Response;
             try {
@@ -115,6 +117,10 @@ export function startProxy(options: ProxyOptions): ProxyServer | null {
             } finally {
               clearTimeout(connectTimer);
             }
+
+            logDebug(
+              `[proxy] upstream responded status=${response.status} sessionID=${sessionID ?? "none"} model=${targetModel ?? "none"}`,
+            );
 
             // Handle 401/403: disable key immediately
             if (response.status === 401 || response.status === 403) {
@@ -157,6 +163,9 @@ export function startProxy(options: ProxyOptions): ProxyServer | null {
 
             return response;
           } catch (error) {
+            logDebug(
+              `[proxy] fetch error sessionID=${sessionID ?? "none"}: ${error instanceof Error ? error.message : String(error)}`,
+            );
             return new Response(
               JSON.stringify({
                 error: {

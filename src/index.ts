@@ -363,13 +363,19 @@ export const NvidiaNimKeyRotator: Plugin = async (
           const message =
             typeof status.message === "string" ? status.message : "";
           const is429Retry = /429|too many requests|rate.?limit/i.test(message);
+          const isTimeoutRetry = /time.?out|timed.?out|abort/i.test(message);
           logDebug(
-            `[event] session.status.retry sessionID=${sessionID} attempt=${status.attempt} message=${message} is429=${is429Retry} hasError=${!!props?.error}`,
+            `[event] session.status.retry sessionID=${sessionID} attempt=${status.attempt} message=${message} is429=${is429Retry} isTimeout=${isTimeoutRetry} hasError=${!!props?.error}`,
           );
-          // Build error with statusCode so classifyError returns "rate_limit"
-          const error = is429Retry
-            ? { name: "APIError", data: { statusCode: 429, message } }
-            : (props?.error ?? status);
+          // Synthesize a typed error so classifyError picks the right class
+          let error: unknown;
+          if (is429Retry) {
+            error = { name: "APIError", data: { statusCode: 429, message } };
+          } else if (isTimeoutRetry) {
+            error = { name: "APIError", data: { statusCode: 408, message } };
+          } else {
+            error = { name: "APIError", data: { statusCode: 503, message } };
+          }
           await handleError(
             {
               sessionID,

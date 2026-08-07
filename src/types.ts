@@ -11,7 +11,12 @@ export type ErrorClass =
   | "network"
   | "non_retryable";
 
-export type BenchmarkStatus = "idle" | "running" | "done" | "error";
+export type BenchmarkStatus =
+  | "idle"
+  | "running"
+  | "done"
+  | "error"
+  | "cancelled";
 
 export interface ModelBlacklistEntry {
   blacklistedUntil: number;

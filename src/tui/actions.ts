@@ -350,34 +350,22 @@ export async function startBenchmark(): Promise<void> {
   callRenderApp();
 }
 
-/** Cancels one or all benchmark runners. Resets model statuses. */
+/** Cancels one or all benchmark runners. Preserves collected metrics. */
 export function cancelBenchmark(modelId?: string): void {
   if (modelId) {
     const runner = state.benchmarkRunners.get(modelId);
     if (runner) {
       runner.cancel();
-      // cancel() already evicts from map
       const model = state.store.fallbackChain.find((m) => m.id === modelId);
-      if (model) {
-        model.benchmarkStatus = "idle";
-        delete model.benchmarkTps;
-        delete model.benchmarkTtfb;
-        delete model.benchmarkError;
-      }
+      if (model) runner.applyResultToModel(model);
       safeSaveStore();
       callRenderApp();
     }
   } else {
-    // Cancel all
     for (const [id, runner] of state.benchmarkRunners) {
       runner.cancel();
       const model = state.store.fallbackChain.find((m) => m.id === id);
-      if (model) {
-        model.benchmarkStatus = "idle";
-        delete model.benchmarkTps;
-        delete model.benchmarkTtfb;
-        delete model.benchmarkError;
-      }
+      if (model) runner.applyResultToModel(model);
     }
     state.benchmarkRunners.clear();
     safeSaveStore();

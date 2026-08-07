@@ -827,6 +827,18 @@ export function buildFallbackChain(): ScreenContent {
     } else if (model.benchmarkStatus === "error") {
       statusText = `\u2717 ${model.benchmarkError}`;
       statusIsError = true;
+    } else if (model.benchmarkStatus === "cancelled") {
+      const ttfbStr =
+        model.benchmarkTtfb != null && Number.isFinite(model.benchmarkTtfb)
+          ? `${model.benchmarkTtfb.toFixed(0)}ms`
+          : "?ms";
+      const tpsStr =
+        model.benchmarkTps != null &&
+        Number.isFinite(model.benchmarkTps) &&
+        model.benchmarkTps > 0
+          ? `${model.benchmarkTps.toFixed(1)}`
+          : "?";
+      statusText = `Cancelled ${ttfbStr} TTFB, ${tpsStr} TPS`;
     } else {
       statusText = "";
     }

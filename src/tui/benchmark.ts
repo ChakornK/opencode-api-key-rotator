@@ -145,10 +145,12 @@ export class BenchmarkRunner {
     } else if (this._phase === "error") {
       model.benchmarkStatus = "error";
       model.benchmarkError = this._error;
+      model.benchmarkTtfb = this._metrics.ttfb;
+      model.benchmarkTps = this.lastGoodTps;
     } else if (this._phase === "cancelled") {
-      model.benchmarkStatus = "idle";
-      delete model.benchmarkTtfb;
-      delete model.benchmarkTps;
+      model.benchmarkStatus = "cancelled";
+      model.benchmarkTtfb = this._metrics.ttfb;
+      model.benchmarkTps = this.lastGoodTps;
       delete model.benchmarkError;
     }
   }
@@ -183,7 +185,7 @@ export class BenchmarkRunner {
               "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
           },
         ],
-        max_tokens: 512,
+        max_tokens: 256,
         stream: true,
       }),
       signal,
@@ -244,7 +246,7 @@ export class BenchmarkRunner {
               if (content) {
                 charCount += content.length;
                 contentChunks++;
-                if (streamStart === 0) streamStart = ttfbTime;
+                if (streamStart === 0) streamStart = Date.now();
               }
             } catch {}
           }

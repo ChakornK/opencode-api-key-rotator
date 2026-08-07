@@ -133,7 +133,7 @@ export function setStatus(msg: string, color?: string): void {
 
 export function safeSaveStore(): boolean {
   try {
-    saveStore(state.store);
+    saveStore(state.store, undefined, true);
     return true;
   } catch (err) {
     console.error("[nim-rotator] Save failed:", err);

@@ -87,7 +87,7 @@ describe("Full cancel → save → reload integration", () => {
 
     // Save (simulates safeSaveStore after cancel)
     store.fallbackChain = [model];
-    saveStore(store, { storePath: TEST_STORE_PATH });
+    saveStore(store, { storePath: TEST_STORE_PATH }, true);
 
     // Verify disk
     const raw = JSON.parse(readFileSync(TEST_STORE_PATH, "utf-8"));
@@ -100,7 +100,7 @@ describe("Full cancel → save → reload integration", () => {
     expect(reloaded!.fallbackChain[0].benchmarkTtfb).toBeGreaterThanOrEqual(0);
 
     // Simulate another save AFTER reload (e.g., user reorders chain)
-    saveStore(reloaded!, { storePath: TEST_STORE_PATH });
+    saveStore(reloaded!, { storePath: TEST_STORE_PATH }, true);
 
     // Verify metrics survive second save
     const reloaded2 = loadStore({ storePath: TEST_STORE_PATH });
@@ -121,7 +121,7 @@ describe("Full cancel → save → reload integration", () => {
       benchmarkStatus: "running",
     };
     const store = makeStore([model]);
-    saveStore(store, { storePath: TEST_STORE_PATH });
+    saveStore(store, { storePath: TEST_STORE_PATH }, true);
 
     // Sanitize writes "idle" to disk but does NOT mutate the live object
     expect(model.benchmarkStatus).toBe("running");
@@ -140,7 +140,7 @@ describe("Full cancel → save → reload integration", () => {
       benchmarkTps: 30,
     };
     const store = makeStore([model]);
-    saveStore(store, { storePath: TEST_STORE_PATH });
+    saveStore(store, { storePath: TEST_STORE_PATH }, true);
 
     // "cancelled" should NOT be touched by sanitize
     expect(model.benchmarkStatus).toBe("cancelled");
@@ -159,10 +159,39 @@ describe("Full cancel → save → reload integration", () => {
       { id: "a", name: "A" },
       { id: "b", name: "B" },
     ]);
-    saveStore(store, { storePath: TEST_STORE_PATH });
+    saveStore(store, { storePath: TEST_STORE_PATH }, true);
 
     const loaded = loadStore({ storePath: TEST_STORE_PATH });
     expect(loaded!.fallbackChain).toHaveLength(2);
     expect(loaded!.fallbackChain[1].id).toBe("b");
+  });
+
+  test("plugin save does NOT overwrite TUI's fallback chain changes", () => {
+    // TUI removes model B, saves with ownsFallbackChain=true
+    const tuiStore = makeStore([
+      { id: "a", name: "A" },
+      { id: "b", name: "B" },
+    ]);
+    saveStore(tuiStore, { storePath: TEST_STORE_PATH }, true);
+
+    // TUI removes model B
+    tuiStore.fallbackChain = [{ id: "a", name: "A" }];
+    saveStore(tuiStore, { storePath: TEST_STORE_PATH }, true);
+
+    // Verify disk has only model A
+    let loaded = loadStore({ storePath: TEST_STORE_PATH });
+    expect(loaded!.fallbackChain).toHaveLength(1);
+
+    // Plugin saves its stale store (still has model B) WITHOUT ownsFallbackChain
+    const pluginStore = makeStore([
+      { id: "a", name: "A" },
+      { id: "b", name: "B" },
+    ]);
+    saveStore(pluginStore, { storePath: TEST_STORE_PATH }); // default: disk wins
+
+    // Verify disk STILL has only model A (plugin didn't overwrite TUI's removal)
+    loaded = loadStore({ storePath: TEST_STORE_PATH });
+    expect(loaded!.fallbackChain).toHaveLength(1);
+    expect(loaded!.fallbackChain[0].id).toBe("a");
   });
 });

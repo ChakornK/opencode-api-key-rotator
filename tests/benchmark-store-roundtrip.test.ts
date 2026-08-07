@@ -86,8 +86,8 @@ describe("Store save/load round-trip for benchmark results", () => {
       },
     ]);
 
-    // Second save — merge-on-save path (disk exists)
-    saveStore(updatedStore, { storePath: TEST_STORE_PATH });
+    // Second save — merge-on-save path (disk exists), TUI owns fallback chain
+    saveStore(updatedStore, { storePath: TEST_STORE_PATH }, true);
 
     // Reload and verify
     const loaded = loadStore({ storePath: TEST_STORE_PATH });
@@ -106,7 +106,7 @@ describe("Store save/load round-trip for benchmark results", () => {
       { id: "model-1", name: "Model A" },
       { id: "model-2", name: "Model B" },
     ]);
-    saveStore(updatedStore, { storePath: TEST_STORE_PATH });
+    saveStore(updatedStore, { storePath: TEST_STORE_PATH }, true);
 
     const loaded = loadStore({ storePath: TEST_STORE_PATH });
     expect(loaded!.fallbackChain).toHaveLength(2);
@@ -123,7 +123,7 @@ describe("Store save/load round-trip for benchmark results", () => {
 
     // Memory removed model-2
     const updatedStore = makeStore([{ id: "model-1", name: "Model A" }]);
-    saveStore(updatedStore, { storePath: TEST_STORE_PATH });
+    saveStore(updatedStore, { storePath: TEST_STORE_PATH }, true);
 
     const loaded = loadStore({ storePath: TEST_STORE_PATH });
     expect(loaded!.fallbackChain).toHaveLength(1);
@@ -150,7 +150,7 @@ describe("Store save/load round-trip for benchmark results", () => {
       benchmarkStatus: "running",
     };
     const memStore = makeStore([running]);
-    saveStore(memStore, { storePath: TEST_STORE_PATH });
+    saveStore(memStore, { storePath: TEST_STORE_PATH }, true);
 
     // The sanitize step should NOT mutate the original in-memory model
     expect(running.benchmarkStatus).toBe("running");

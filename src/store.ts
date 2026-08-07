@@ -125,8 +125,14 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
   }
 }
 
-/** Saves the store with merge-on-save strategy. Acquires advisory lock (best-effort). */
-export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
+/** Saves the store with merge-on-save strategy. Acquires advisory lock (best-effort).
+ *  When ownsFallbackChain is true (TUI), memory's fallback chain wins.
+ *  When false (plugin/proxy), disk's fallback chain is preserved. */
+export function saveStore(
+  store: KeyStore,
+  config?: KeyStoreConfig,
+  ownsFallbackChain = false,
+): void {
   const storePath = resolveStorePath(config);
   const lockPath = `${storePath}.lock`;
   let lockAcquired = false;
@@ -144,10 +150,12 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
     let toWrite: KeyStore;
 
     if (disk) {
-      // Merge: disk wins key list structure, runtime wins fallback chain and volatile state
+      const fallbackChain = ownsFallbackChain
+        ? store.fallbackChain.map((m) => ({ ...m }))
+        : disk.fallbackChain;
       toWrite = {
         ...disk,
-        fallbackChain: store.fallbackChain.map((m) => ({ ...m })),
+        fallbackChain,
         lastUsedKeyId: store.lastUsedKeyId,
         updatedAt: Date.now(),
       };

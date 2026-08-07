@@ -159,6 +159,18 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
           diskKey.modelBlacklist = memKey.modelBlacklist;
         }
       }
+      // Merge per-model benchmark state from memory
+      for (const memModel of store.fallbackChain) {
+        const diskModel = toWrite.fallbackChain.find(
+          (m) => m.id === memModel.id,
+        );
+        if (diskModel) {
+          diskModel.benchmarkStatus = memModel.benchmarkStatus;
+          diskModel.benchmarkTtfb = memModel.benchmarkTtfb;
+          diskModel.benchmarkTps = memModel.benchmarkTps;
+          diskModel.benchmarkError = memModel.benchmarkError;
+        }
+      }
       // Validate lastUsedKeyId
       if (
         toWrite.lastUsedKeyId &&

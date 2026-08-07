@@ -97,6 +97,18 @@ export function startProxy(options: ProxyOptions): ProxyServer | null {
             }
             headers.set("Authorization", `Bearer ${next.key.key}`);
 
+            const headerEntries: string[] = [];
+            headers.forEach((v, k) => {
+              if (k.toLowerCase() === "authorization") {
+                headerEntries.push(`${k}: ${v.slice(0, 15)}...`);
+              } else {
+                headerEntries.push(`${k}: ${v}`);
+              }
+            });
+            logDebug(
+              `[proxy] FETCHING ${req.method} ${upstream} sessionID=${sessionID ?? "none"} model=${targetModel ?? "none"} bodyLen=${bodyText?.length ?? 0}\n  headers: ${headerEntries.join(", ")}`,
+            );
+
             // Forward with connect timeout
             const controller = new AbortController();
             const connectTimer = setTimeout(() => {

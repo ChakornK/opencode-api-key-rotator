@@ -126,32 +126,38 @@ export class BenchmarkRunner {
 
   /** Writes benchmark results to the provided model reference. Caller must re-resolve model by ID. */
   applyResultToModel(model: FallbackModel): void {
+    const hasTtfb =
+      this._metrics.ttfb != null && Number.isFinite(this._metrics.ttfb);
+    const hasTps =
+      this.lastGoodTps != null &&
+      Number.isFinite(this.lastGoodTps) &&
+      this.lastGoodTps > 0;
+
     if (this._phase === "done") {
       model.benchmarkStatus = "done";
-      model.benchmarkTtfb =
-        this._metrics.ttfb != null && Number.isFinite(this._metrics.ttfb)
-          ? this._metrics.ttfb
-          : undefined;
-      model.benchmarkTps =
-        this._metrics.tps != null &&
-        Number.isFinite(this._metrics.tps) &&
-        this._metrics.tps > 0
-          ? this._metrics.tps
-          : undefined;
-      if (model.benchmarkTps == null) {
+      model.benchmarkTtfb = hasTtfb ? this._metrics.ttfb : undefined;
+      model.benchmarkTps = hasTps ? this.lastGoodTps : undefined;
+      delete model.benchmarkError;
+      if (!hasTps) {
         model.benchmarkStatus = "error";
         model.benchmarkError = "TPS calculation failed";
       }
-    } else if (this._phase === "error") {
-      model.benchmarkStatus = "error";
-      model.benchmarkError = this._error;
-      model.benchmarkTtfb = this._metrics.ttfb;
-      model.benchmarkTps = this.lastGoodTps;
-    } else if (this._phase === "cancelled") {
-      model.benchmarkStatus = "cancelled";
-      model.benchmarkTtfb = this._metrics.ttfb;
-      model.benchmarkTps = this.lastGoodTps;
-      delete model.benchmarkError;
+    } else if (this._phase === "error" || this._phase === "cancelled") {
+      if (hasTtfb || hasTps) {
+        // Partial results collected before interruption — keep them
+        model.benchmarkStatus = "cancelled";
+        model.benchmarkTtfb = hasTtfb ? this._metrics.ttfb : undefined;
+        model.benchmarkTps = hasTps ? this.lastGoodTps : undefined;
+        delete model.benchmarkError;
+      } else if (this._phase === "error") {
+        model.benchmarkStatus = "error";
+        model.benchmarkError = this._error;
+      } else {
+        model.benchmarkStatus = "idle";
+        delete model.benchmarkTtfb;
+        delete model.benchmarkTps;
+        delete model.benchmarkError;
+      }
     }
   }
 

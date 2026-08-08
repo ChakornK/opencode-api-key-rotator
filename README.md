@@ -1,23 +1,24 @@
 # opencode-nim-rotator
 
-An [OpenCode](https://opencode.ai) plugin for managing and rotating multiple [NVIDIA NIM](https://build.nvidia.com) API keys, with automatic model fallback, benchmarking, and a built-in TUI manager.
+An [OpenCode](https://opencode.ai) plugin that rotates multiple [NVIDIA NIM](https://build.nvidia.com) API keys, falls back across models on failure, benchmarks latency, and ships a TUI for managing it all.
 
 ## Features
 
-- **API Key Rotation** — round-robin or least-failures strategy across multiple NVIDIA NIM keys
-- **Model Fallback Chain** — automatically retries with alternative models on streaming timeout, rate limit (429), or retryable server errors (408, 500, 502, 503, 504)
-- **Benchmarking** — measure TTFB and TPS for models in your fallback chain
-- **TUI Manager** — terminal UI for managing keys, the fallback chain, and settings
-- **Themes** — syncs with your OpenCode theme or select independently
+- **API Key Rotation**: round-robin or least-failures strategy across multiple NVIDIA NIM keys
+- **Model Fallback Chain**: retries with alternative models on streaming timeout, rate limit (429), or server errors (408, 500, 502, 503, 504)
+- **Benchmarking**: measure TTFB and TPS for models in your fallback chain
+- **TUI Manager**: terminal UI for keys, fallback chain, and settings
+- **Themes**: syncs with your OpenCode theme or overrides it
 
 ## How It Works
 
-The plugin hooks into OpenCode's request pipeline:
+The plugin runs a local HTTP proxy that intercepts NVIDIA NIM traffic. Hooks coordinate model selection and error tracking:
 
-- **`chat.headers`** injects a rotated API key into the `Authorization` header on every outgoing NVIDIA NIM request. If a key returns 401, 403, or 429, its failure count is incremented and the next key is tried. Keys that exceed `NIM_ROTATOR_MAX_FAILURES` are automatically disabled. Successful requests reset the failure count.
-- **`shell.env`** rotates `NVIDIA_API_KEY` for shell commands too.
-- **`chat.message`** rewrites the model to the matching entry in your fallback chain. If the streaming response stalls for more than 60 seconds, returns a retryable server error (408, 429, 500, 502, 503, 504), or accumulates `maxRateLimitFailures` consecutive 429s, the plugin aborts the request and re-prompts the session with the next model in the chain. A toast notification appears when fallback activates. The last model in the chain is never timed out.
-- **`session.error`** / **`session.status`** record key-level rate-limit failures, which reset when the next request succeeds on that key.
+- **Local proxy**: forwards requests to `https://integrate.api.nvidia.com/v1`, injecting a rotated `Authorization: Bearer <key>` header. On 401/403 the proxy disables the key and tries the next one. On 429 the key's `rateLimitCount` increments and a per-model cooldown applies.
+- **`chat.message`**: rewrites the model to the highest-priority available entry in your fallback chain.
+- **`shell.env`**: rotates `NVIDIA_API_KEY` for shell commands.
+- **Streaming timeout**: if no data arrives for 60 seconds, the proxy aborts the stream and triggers fallback. Retryable server errors (408, 429, 500, 502, 503, 504) also trigger fallback. A toast notification shows the model switch.
+- **`event` handler**: tracks `session.error`, `session.status`, and `session.next.step.failed` to drive rate-limit counting and session cleanup. Session-level counters reset when the turn completes.
 
 ## Install
 
@@ -25,7 +26,7 @@ The plugin hooks into OpenCode's request pipeline:
 npm install -g opencode-nim-rotator
 ```
 
-The postinstall script automatically adds the plugin to your `~/.config/opencode/opencode.json`.
+The postinstall script adds the plugin to your `~/.config/opencode/opencode.json`.
 
 ## Setup
 
@@ -43,7 +44,7 @@ Or if you prefer:
 npx opencode-nim-rotator
 ```
 
-Or manually — add at least one key via OpenCode's auth system:
+Or add a key through OpenCode's auth system:
 
 ```bash
 opencode /connect nvidia
@@ -53,38 +54,37 @@ Select "Enter NVIDIA NIM API Key" and paste your key.
 
 ### 2. Add more keys, build a fallback chain
 
-The TUI covers everything from one terminal:
+The TUI handles all management from one terminal:
 
-- **API Key Rotation** — add, rename, delete, toggle keys; reset failures; switch strategy (round-robin / least-failures); export to JSON; import from JSON.
-- **Model Fallback Chain** — build an ordered list of NVIDIA NIM models. On a failure, the plugin walks the chain from top to bottom. You can also benchmark any model in the chain to record its TTFB and TPS, and tune the rate-limit threshold (how many consecutive 429s trigger fallback).
-- **Themes** — pick a color theme, or sync with `opencode.json`.
+- **API Key Rotation**: add, rename, delete, toggle keys; reset failures; switch strategy (round-robin / least-failures); export to JSON; import from JSON.
+- **Model Fallback Chain**: build an ordered list of NVIDIA NIM models. On failure the plugin picks the earliest available model in the chain. You can benchmark any model to record TTFB and TPS, and tune the rate-limit threshold (consecutive 429s before fallback).
+- **Themes**: pick a color theme, or sync with `opencode.json`.
 
 ### 3. Restart OpenCode
 
-After adding keys, restart opencode. The plugin will rotate keys on every NVIDIA API request and retry failed requests against your fallback chain.
+After adding keys, restart OpenCode. The plugin rotates keys on every NVIDIA API request and retries failed requests against your fallback chain.
 
 ## Model Fallback Chain
 
-In addition to rotating API keys, the plugin can automatically retry failed requests against a chain of alternative NVIDIA NIM models. When the primary model times out, returns a retryable server error, or hits the rate limit threshold, the plugin automatically retries the same prompt with the next model in your chain.
+The plugin also retries failed requests against a chain of alternative NVIDIA NIM models. When the primary model times out, returns a retryable server error, or hits the rate-limit threshold, the plugin retries the same prompt with the earliest available model in your chain (skipping the one that failed).
 
 ### Benchmarking Models
 
-Each model in the chain can be benchmarked to measure its latency and throughput on your network. The benchmark runs a streaming programming prompt (`max_tokens: 1024`) and records:
+Benchmark any model in the chain to measure latency and throughput on your network. The benchmark sends a streaming programming prompt (`max_tokens: 256`) and records:
 
-- **TTFB** — milliseconds until the first token streams back
-- **TPS** — throughput during streaming, estimated from character count (`4 chars/token`)
+- **TTFB**: milliseconds until the HTTP response arrives
+- **TPS**: tokens per second during streaming, estimated from character count (`4 chars/token`)
 
-Results are saved with the model in the key store.
+The plugin saves results with the model in the key store.
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable                   | Description                         | Default                                    |
-| -------------------------- | ----------------------------------- | ------------------------------------------ |
-| `NIM_ROTATOR_STORE_PATH`   | Path to key store JSON file         | `~/.config/opencode/nim-rotator-keys.json` |
-| `NIM_ROTATOR_MAX_FAILURES` | Max failures before disabling a key | `5`                                        |
-| `NVIDIA_API_KEY`           | Fallback API key (auto-seeded)      | —                                          |
+| Variable                 | Description                                          | Default                                    |
+| ------------------------ | ---------------------------------------------------- | ------------------------------------------ |
+| `NIM_ROTATOR_STORE_PATH` | Path to key store JSON file                          | `~/.config/opencode/nim-rotator-keys.json` |
+| `NVIDIA_API_KEY`         | Fallback API key (auto-seeded if no keys configured) | —                                          |
 
 ### opencode.json Options
 
@@ -95,17 +95,26 @@ Results are saved with the model in the key store.
       "opencode-nim-rotator",
       {
         "rotationStrategy": "round-robin",
-        "storePath": "/custom/path/to/keys.json"
+        "storePath": "/custom/path/to/keys.json",
+        "proxyPort": 0,
+        "disableProxy": false
       }
     ]
   ]
 }
 ```
 
+| Option             | Description                                      | Default       |
+| ------------------ | ------------------------------------------------ | ------------- |
+| `rotationStrategy` | `"round-robin"` or `"least-failures"`            | `round-robin` |
+| `storePath`        | Custom path to the key store JSON file           | (default)     |
+| `proxyPort`        | TCP port for the local proxy (`0` = OS-assigned) | `0`           |
+| `disableProxy`     | Skip starting the intercepting proxy             | `false`       |
+
 ### Rotation Strategies
 
-- **`round-robin`** (default): Cycles through keys in order
-- **`least-failures`**: Always uses the key with the fewest failures
+- **`round-robin`** (default): cycles through keys in order
+- **`least-failures`**: picks the key with the fewest `rateLimitCount`
 
 ## Key Store Format
 
@@ -120,12 +129,10 @@ Keys, fallback chain, and theme are stored in `~/.config/opencode/nim-rotator-ke
       "key": "nvapi-...",
       "createdAt": 1700000000000,
       "lastUsedAt": 1700000100000,
-      "failureCount": 0,
       "rateLimitCount": 0,
       "enabled": true
     }
   ],
-  "currentIndex": 0,
   "rotationStrategy": "round-robin",
   "updatedAt": 1700000000000,
   "lastUsedKeyId": "uuid",
@@ -143,11 +150,11 @@ Keys, fallback chain, and theme are stored in `~/.config/opencode/nim-rotator-ke
 }
 ```
 
-`rateLimitCount` tracks consecutive 429 errors per key; `maxRateLimitFailures` controls how many trigger a cross-model fallback. Set `theme` to a theme ID to override the TUI theme independently, or leave it empty to sync with `opencode.json`.
+`rateLimitCount` tracks 429 errors per key; `maxRateLimitFailures` (default `3`) controls how many consecutive 429s trigger a cross-model fallback. The proxy disables keys on 401/403 without a threshold. Set `theme` to a theme ID to override the TUI theme, or leave it empty to sync with `opencode.json`.
 
 ## Themes
 
-The TUI supports multiple color themes that match OpenCode's built-in themes. By default, the rotator **syncs with your `opencode.json` theme setting**.
+The TUI supports multiple color themes matching OpenCode's built-ins. The rotator **syncs with your `opencode.json` theme setting** by default.
 
 | ID           | Name               |
 | ------------ | ------------------ |
@@ -170,35 +177,36 @@ To override via `opencode.json`:
 }
 ```
 
-To override independently, store the override in the key store's `theme` field. Set it to `""` or remove it to revert to syncing with `opencode.json`.
+To override per-plugin, set the key store's `theme` field to a theme ID. Set it to `""` to revert to syncing with `opencode.json`.
 
 ## Development
 
 ```bash
 # Install dependencies
-bun install
+bun install          # or: npm install
 
-# Run TUI locally
+# Run TUI locally (requires bun for .ts execution)
 bun run tui
 
 # Build TypeScript
-bun run build
+npm run build        # or: bun run build
 ```
 
 ## Uninstall
 
-To remove the plugin and clean up all associated data:
+To remove the plugin:
 
 ```bash
 npm uninstall -g opencode-nim-rotator
 ```
 
-The uninstaller will automatically:
+The uninstaller will:
 
 1. Remove `opencode-nim-rotator` from your `~/.config/opencode/opencode.json` plugin list
-2. Delete your key store file at `~/.config/opencode/nim-rotator-keys.json`
+2. Ask whether to delete your key store at `~/.config/opencode/nim-rotator-keys.json` (defaults to No)
+3. Delete `~/.config/opencode/nim-rotator-theme.json`
 
-**Note:** This will permanently delete all stored API keys, so back them up first if needed. After uninstalling, restart opencode to apply the changes.
+If you confirm key store deletion, all stored API keys are gone. Back them up first if needed. Restart OpenCode after uninstalling.
 
 ## License
 

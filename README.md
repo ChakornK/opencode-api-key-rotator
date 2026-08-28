@@ -2,6 +2,9 @@
 
 An [OpenCode](https://opencode.ai) plugin that rotates multiple [NVIDIA NIM](https://build.nvidia.com) API keys, falls back across models on failure, benchmarks latency, and ships a TUI for managing it all.
 
+> [!WARNING]
+> This project is deprecated as it is no longer necessary. Please check out [ChakornK/nim-playground-provider](https://github.com/ChakornK/nim-playground-provider).
+
 ## Features
 
 - **API Key Rotation**: round-robin or least-failures strategy across multiple NVIDIA NIM keys
